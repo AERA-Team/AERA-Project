@@ -19,6 +19,7 @@ aes-gcm = "^0.10"
 ed25519-dalek = { version = "^2.1", features = ["serde"] }
 sha2 = "^0.10"
 rand = "^0.8"
+rpassword = "^7"
 bip39 = { version = "^2.0", features = ["rand"] }
 hex = "^0.4"
 zeroize = { version = "^1.7", features = ["derive"] }

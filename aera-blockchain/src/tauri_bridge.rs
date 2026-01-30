@@ -9,10 +9,11 @@ use crate::state::genesis::{BLOCK_REWARD, TOTAL_SUPPLY, DECIMALS};
 use crate::wallet::keystore::KeyPurpose;
 use crate::state::TransactionRecord;
 use serde::{Deserialize, Serialize};
+use std::path::{Component, Path};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tauri::State;
-use tracing::{info, debug};
+use tauri::{Manager, State};
+use tracing::debug;
 
 // ============================================================================
 // Tauri State
@@ -83,15 +84,17 @@ pub async fn get_default_data_dir(app_handle: tauri::AppHandle) -> Result<String
 #[tauri::command]
 pub async fn init_node(
     state: State<'_, TauriState>,
+    app_handle: tauri::AppHandle,
     data_dir: String,
 ) -> Result<String, String> {
+    let data_dir = sanitize_data_dir(&app_handle, &data_dir)?;
     let mut config = ManagerConfig {
         data_dir: data_dir.clone(),
         ..state.config.clone()
     };
 
     // Attempt to load bridge config from config.toml in the same directory as the app or project
-    let config_path = std::path::Path::new("config.toml");
+    let config_path = Path::new(&data_dir).join("config.toml");
     if config_path.exists() {
         if let Ok(content) = std::fs::read_to_string(config_path) {
             if let Ok(value) = content.parse::<toml::Value>() {
@@ -129,6 +132,7 @@ pub async fn create_wallet(
     state: State<'_, TauriState>,
     password: String,
 ) -> Result<WalletInfo, String> {
+    validate_password(&password)?;
     let guard = state.manager.read().await;
     let manager = guard.as_ref().ok_or("Node not initialized")?;
 
@@ -151,6 +155,7 @@ pub async fn create_mnemonic_wallet(
     state: State<'_, TauriState>,
     password: String,
 ) -> Result<WalletInfo, String> {
+    validate_password(&password)?;
     let guard = state.manager.read().await;
     let manager = guard.as_ref().ok_or("Node not initialized")?;
 
@@ -177,6 +182,9 @@ pub async fn import_mnemonic_wallet(
     phrase: String,
     password: String,
 ) -> Result<WalletInfo, String> {
+    validate_password(&password)?;
+    validate_len(&phrase, "Mnemonic")?;
+    validate_mnemonic(&phrase)?;
     let guard = state.manager.read().await;
     let manager = guard.as_ref().ok_or("Node not initialized")?;
 
@@ -212,7 +220,6 @@ pub async fn get_address(state: State<'_, TauriState>) -> Result<String, String>
     
     match vault.get_first_address() {
         Some(address) => {
-            info!("get_address() returning: {}", address);
             Ok(address)
         }
         None => Err("No wallet found. Please create or import a wallet first.".to_string())
@@ -255,6 +262,8 @@ pub async fn unlock_wallet(
     address: String,
     password: String,
 ) -> Result<WalletInfo, String> {
+    validate_password(&password)?;
+    validate_len(&address, "Address")?;
     let guard = state.manager.read().await;
     let manager = guard.as_ref().ok_or("Node not initialized")?;
 
@@ -262,24 +271,17 @@ pub async fn unlock_wallet(
     
     // Trim and lowercase address from input
     let address = address.trim().to_lowercase();
-    info!("unlock_wallet() attempting to unlock: '{}'", address);
-    info!("Available keys in vault: {:?}", vault.list_keys());
     
     // Verify key exists
     if !vault.has_key(&address) {
-        return Err(format!(
-            "Address '{}' not found in keystore. Available addresses: {:?}",
-            address,
-            vault.list_keys()
-        ));
+        return Err("Address not found in keystore".to_string());
     }
 
     // Verify password and unlock session
     vault.unlock_session(&password, Some(&address)).map_err(|e| e.to_string())?;
     
     // Fetch actual balance from state
-    let address_bytes = manager.address_to_bytes(&address)
-        .map_err(|e| format!("Invalid address format: {}", e))?;
+    let address_bytes = parse_aera_address(&address)?;
     let balance = manager.state().get_balance(&address_bytes).unwrap_or(0);
 
     Ok(WalletInfo {
@@ -349,23 +351,14 @@ pub async fn get_balance(
     let guard = state.manager.read().await;
     let manager = guard.as_ref().ok_or("Node not initialized")?;
 
-    // Decode bech32-style address to bytes
-    let address = address.to_lowercase();
-    let hex_part = address.replace("aera1", "");
-    let bytes = hex::decode(&hex_part).map_err(|e| e.to_string())?;
-    
-    if bytes.len() != 32 {
-        return Err("Invalid address length".to_string());
-    }
-    
-    let mut addr_bytes = [0u8; 32];
-    addr_bytes.copy_from_slice(&bytes);
+    validate_len(&address, "Address")?;
+    let addr_bytes = parse_aera_address(&address)?;
 
     // Get balance from state DB
     let balance = manager.state().get_balance(&addr_bytes).map_err(|e| e.to_string())?;
 
     Ok(WalletInfo {
-        address,
+        address: address.to_lowercase(),
         balance: balance.to_string(),
         balance_formatted: format_aera(balance),
         mnemonic: None,
@@ -377,6 +370,8 @@ pub async fn get_balance(
 pub async fn get_tron_balance(state: State<'_, TauriState>, address: String) -> Result<String, String> {
     let guard = state.manager.read().await;
     let manager = guard.as_ref().ok_or("Node not initialized")?;
+    validate_len(&address, "Address")?;
+    validate_tron_address(&address)?;
     let balance = manager.get_tron_balance(&address).await.map_err(|e| e.to_string())?;
     Ok(format!("{:.6} USDT", balance))
 }
@@ -386,6 +381,8 @@ pub async fn get_tron_balance(state: State<'_, TauriState>, address: String) -> 
 pub async fn get_trx_balance(state: State<'_, TauriState>, address: String) -> Result<String, String> {
     let guard = state.manager.read().await;
     let manager = guard.as_ref().ok_or("Node not initialized")?;
+    validate_len(&address, "Address")?;
+    validate_tron_address(&address)?;
     let balance = manager.get_trx_balance(&address).await.map_err(|e| e.to_string())?;
     Ok(format!("{:.6} TRX", balance))
 }
@@ -395,6 +392,8 @@ pub async fn get_trx_balance(state: State<'_, TauriState>, address: String) -> R
 pub async fn get_eth_balance(state: State<'_, TauriState>, address: String) -> Result<String, String> {
     let guard = state.manager.read().await;
     let manager = guard.as_ref().ok_or("Node not initialized")?;
+    validate_len(&address, "Address")?;
+    validate_eth_address(&address)?;
     let balance = manager.get_eth_balance(&address).await.map_err(|e| e.to_string())?;
     Ok(format!("{:.4} ETH", balance))
 }
@@ -404,6 +403,8 @@ pub async fn get_eth_balance(state: State<'_, TauriState>, address: String) -> R
 pub async fn get_eth_usdt_balance(state: State<'_, TauriState>, address: String) -> Result<String, String> {
     let guard = state.manager.read().await;
     let manager = guard.as_ref().ok_or("Node not initialized")?;
+    validate_len(&address, "Address")?;
+    validate_eth_address(&address)?;
     let balance = manager.get_eth_usdt_balance(&address).await.map_err(|e| e.to_string())?;
     Ok(format!("{:.6} USDT", balance))
 }
@@ -415,6 +416,8 @@ pub async fn start_mining(
     app_handle: tauri::AppHandle,
     address: String
 ) -> Result<(), String> {
+    validate_len(&address, "Address")?;
+    parse_aera_address(&address)?;
     // 1. Get access to mining manager
     let manager_arc = state.manager.clone();
     let guard = manager_arc.read().await;
@@ -521,6 +524,7 @@ pub async fn get_activity(
 ) -> Result<Vec<TransactionRecord>, String> {
     let guard = state.manager.read().await;
     let manager = guard.as_ref().ok_or("Node not initialized")?;
+    validate_len(&address, "Address")?;
     
     manager.state().get_activity(&address).map_err(|e| e.to_string())
 }
@@ -548,10 +552,11 @@ pub async fn send_aera_transaction(
     asset: String,
     password: String,
 ) -> Result<TransactionResult, String> {
-    info!("📨 Initiating {} transaction to node API...", asset.to_uppercase());
-    info!("   From: {}", from);
-    info!("   Recipient: {}", recipient);
-    info!("   Amount: {}", amount);
+    validate_password(&password)?;
+    validate_len(&from, "From")?;
+    validate_len(&recipient, "Recipient")?;
+    validate_len(&amount, "Amount")?;
+    validate_len(&asset, "Asset")?;
 
     // 1. Get Manager & Vault
     let guard = state.manager.read().await;
@@ -560,14 +565,27 @@ pub async fn send_aera_transaction(
 
     // 2. Identify sender (use explicit from address)
     let sender = from.to_lowercase();
+    parse_aera_address(&sender)?;
+    parse_aera_address(&recipient)?;
+    let amount_u128 = amount.parse::<u128>().map_err(|_| "Invalid amount format")?;
+    if amount_u128 == 0 {
+        return Err("Amount must be greater than zero".to_string());
+    }
+    let asset_norm = asset.to_lowercase();
+    if asset_norm != "aera" && asset_norm != "usdt" {
+        return Err("Unsupported asset".to_string());
+    }
+    if !vault.has_key(&sender) {
+        return Err("Sender address not found in keystore".to_string());
+    }
 
     // 3. Formulate Transaction Data & Sign
     let mut payload = serde_json::json!({
         "recipient": recipient,
         "amount": amount,
-        "asset": asset,
+        "asset": asset_norm,
         "sender": sender,
-        "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
+        "timestamp": current_unix_ts()?
     });
 
     let data_to_sign = serde_json::to_vec(&payload).map_err(|e| e.to_string())?;
@@ -583,10 +601,14 @@ pub async fn send_aera_transaction(
         })?;
 
     // 4. Update payload with hex-encoded signature
-    payload.as_object_mut().unwrap().insert(
-        "signature".to_string(), 
-        serde_json::Value::String(hex::encode(signature))
-    );
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert(
+            "signature".to_string(),
+            serde_json::Value::String(hex::encode(signature)),
+        );
+    } else {
+        return Err("Failed to build transaction payload".to_string());
+    }
 
     // 5. POST request to AERA Node API (Simulation Fallback if connection fails)
     let client = reqwest::Client::new();
@@ -599,7 +621,6 @@ pub async fn send_aera_transaction(
     match response_result {
         Ok(response) if response.status().is_success() => {
             let node_res: NodeResponse = response.json().await.map_err(|e| format!("API Response Error: {}", e))?;
-            info!("   ✓ Transaction signed and accepted by Remote Node. Hash: {:?}", node_res.hash);
             Ok(TransactionResult {
                 success: true,
                 tx_hash: node_res.hash,
@@ -608,10 +629,7 @@ pub async fn send_aera_transaction(
         }
         _ => {
             // Fallback: If it's a native AERA/USDT transaction and remote fails, process locally if possible
-            if asset.to_lowercase() == "aera" {
-                info!("   ⚠️ Node connection failed or rejected. Falling back to LOCAL processing...");
-                let amount_u128 = amount.parse::<u128>().map_err(|_| "Invalid amount format")?;
-                
+            if asset_norm == "aera" {
                 match manager.send_native_transaction(sender, recipient, amount_u128, &password).await {
                     Ok(tx_hash) => {
                         Ok(TransactionResult {
@@ -651,10 +669,23 @@ pub async fn cross_chain_transfer(
     chain: String,
     password: String,
 ) -> Result<TransactionResult, String> {
+    validate_password(&password)?;
+    validate_len(&from, "From")?;
+    validate_len(&to, "To")?;
+    validate_len(&amount, "Amount")?;
+    validate_len(&chain, "Chain")?;
     let guard = state.manager.read().await;
     let manager = guard.as_ref().ok_or("Node not initialized")?;
+    let vault = manager.key_vault().read().await;
+    let from_key = from.to_lowercase();
+    if !vault.has_key(&from_key) {
+        return Err("From address not found in keystore".to_string());
+    }
 
     let amount: u128 = amount.parse().map_err(|_| "Invalid amount")?;
+    if amount == 0 {
+        return Err("Amount must be greater than zero".to_string());
+    }
     
     let target = match chain.to_lowercase().as_str() {
         "ethereum" | "eth" => TargetChain::Ethereum,
@@ -664,8 +695,20 @@ pub async fn cross_chain_transfer(
         _ => TargetChain::Aera,
     };
 
+    match target {
+        TargetChain::Aera => {
+            parse_aera_address(&to)?;
+        }
+        TargetChain::Ethereum | TargetChain::EthereumUsdt => {
+            validate_eth_address(&to)?;
+        }
+        TargetChain::Tron | TargetChain::TronNative => {
+            validate_tron_address(&to)?;
+        }
+    }
+
     let transfer = CrossChainTransfer {
-        from_key: from,
+        from_key: from_key,
         to_address: to,
         amount,
         target_chain: target,
@@ -707,5 +750,117 @@ fn format_aera(amount: u128) -> String {
             trimmed_frac
         };
         format!("{}.{} AERA", whole, displayed_frac)
+    }
+}
+
+// ============================================================================
+// Input validation helpers
+// ============================================================================
+
+const MIN_PASSWORD_LEN: usize = 8;
+const MAX_INPUT_LEN: usize = 512;
+
+fn validate_password(password: &str) -> Result<(), String> {
+    if password.len() < MIN_PASSWORD_LEN {
+        return Err(format!("Password must be at least {} characters", MIN_PASSWORD_LEN));
+    }
+    Ok(())
+}
+
+fn validate_mnemonic(phrase: &str) -> Result<(), String> {
+    let words: Vec<&str> = phrase.split_whitespace().collect();
+    if words.len() != 12 && words.len() != 24 {
+        return Err("Mnemonic must be 12 or 24 words".to_string());
+    }
+    Ok(())
+}
+
+fn validate_len(value: &str, field: &str) -> Result<(), String> {
+    if value.len() > MAX_INPUT_LEN {
+        return Err(format!("{} is too long", field));
+    }
+    Ok(())
+}
+
+fn parse_aera_address(address: &str) -> Result<[u8; 32], String> {
+    let address = address.trim().to_lowercase();
+    if !address.starts_with("aera1") || address.len() != 69 {
+        return Err("Invalid AERA address format".to_string());
+    }
+    let hex_part = address.replace("aera1", "");
+    let bytes = hex::decode(&hex_part).map_err(|_| "Invalid AERA address hex")?;
+    if bytes.len() != 32 {
+        return Err("Invalid AERA address length".to_string());
+    }
+    let mut addr = [0u8; 32];
+    addr.copy_from_slice(&bytes);
+    Ok(addr)
+}
+
+fn validate_eth_address(address: &str) -> Result<(), String> {
+    let address = address.trim().to_lowercase();
+    if !address.starts_with("0x") || address.len() != 42 {
+        return Err("Invalid Ethereum address format".to_string());
+    }
+    Ok(())
+}
+
+fn validate_tron_address(address: &str) -> Result<(), String> {
+    let address = address.trim();
+    if !(address.starts_with('T') || address.starts_with('t')) || address.len() < 30 {
+        return Err("Invalid TRON address format".to_string());
+    }
+    Ok(())
+}
+
+fn current_unix_ts() -> Result<u64, String> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .map_err(|_| "Invalid system time".to_string())
+}
+
+fn sanitize_data_dir(app_handle: &tauri::AppHandle, data_dir: &str) -> Result<String, String> {
+    if data_dir.trim().is_empty() {
+        return Err("Data directory is required".to_string());
+    }
+    let data_dir = data_dir.trim();
+    validate_len(data_dir, "Data directory")?;
+    let path = Path::new(data_dir);
+
+    // Reject parent traversal
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err("Invalid data directory path".to_string());
+    }
+
+    // Allow relative paths, or absolute paths under app data dir
+    if path.is_absolute() {
+        let base = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+        let base = base.to_string_lossy().to_string();
+        let normalized = path.to_string_lossy().to_string();
+        if !normalized.starts_with(&base) {
+            return Err("Data directory must be under app data directory".to_string());
+        }
+    }
+
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_aera_address_accepts_valid() {
+        let addr = format!("aera1{}", "00".repeat(32));
+        let parsed = parse_aera_address(&addr).expect("valid");
+        assert_eq!(parsed, [0u8; 32]);
+    }
+
+    #[test]
+    fn validate_mnemonic_requires_word_count() {
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        assert!(validate_mnemonic(phrase).is_ok());
+        assert!(validate_mnemonic("one two three").is_err());
     }
 }

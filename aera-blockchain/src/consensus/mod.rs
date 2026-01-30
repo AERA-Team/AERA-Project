@@ -272,6 +272,11 @@ impl ConsensusEngine {
     // ========================================================================
 
     pub fn verify_block_header(&self, header: &BlockHeader) -> Result<()> {
+        if header.height == 0 {
+            // Genesis block: signature/pubkey may be unset
+            return Ok(());
+        }
+
         if !self.verify_validator(header.height, &header.validator) {
             return Err(anyhow!("Invalid validator for height {}", header.height));
         }
@@ -280,6 +285,22 @@ impl ConsensusEngine {
         if header.timestamp > now + 30_000 {
             return Err(anyhow!("Block timestamp too far in future"));
         }
+        let min_timestamp = now.saturating_sub(10 * 60_000);
+        if header.timestamp < min_timestamp {
+            return Err(anyhow!("Block timestamp too far in past"));
+        }
+
+        let verifier = VerifyingKey::from_bytes(&header.validator_pubkey)
+            .map_err(|e| anyhow!("Invalid validator public key: {}", e))?;
+        let expected_addr = Self::address_from_key(&verifier);
+        if expected_addr != header.validator {
+            return Err(anyhow!("Validator address does not match public key"));
+        }
+
+        let header_bytes = self.header_signing_bytes(header);
+        verifier
+            .verify_strict(&header_bytes, &header.signature)
+            .map_err(|e| anyhow!("Invalid block signature: {}", e))?;
 
         Ok(())
     }
@@ -288,6 +309,21 @@ impl ConsensusEngine {
         if self.double_spend.is_double_spend(tx) {
             return Err(anyhow!("Double-spend detected"));
         }
+
+        if tx.chain_id != self.chain_id {
+            return Err(anyhow!("Invalid chain_id"));
+        }
+
+        let verifier = VerifyingKey::from_bytes(&tx.public_key)
+            .map_err(|e| anyhow!("Invalid public key: {}", e))?;
+        let expected_addr = Self::address_from_key(&verifier);
+        if expected_addr != tx.from {
+            return Err(anyhow!("Sender address does not match public key"));
+        }
+        let sign_bytes = tx.signing_bytes();
+        verifier
+            .verify_strict(&sign_bytes, &tx.signature)
+            .map_err(|e| anyhow!("Invalid transaction signature: {}", e))?;
 
         let fee = genesis::calculate_fee(tx.value);
         let total_cost = tx.value + fee;
@@ -348,6 +384,7 @@ impl ConsensusEngine {
         state_root: Hash,
         validator_key: &SigningKey,
     ) -> Result<BlockHeader> {
+        let validator_pubkey = validator_key.verifying_key().to_bytes();
         let validator_address = Self::address_from_key(&validator_key.verifying_key());
         let height = self.current_height + 1;
         let timestamp = chrono::Utc::now().timestamp_millis() as u64;
@@ -360,6 +397,7 @@ impl ConsensusEngine {
             timestamp,
             height,
             validator: validator_address,
+            validator_pubkey,
             signature: ed25519_dalek::Signature::from_bytes(&[0u8; 64]),
         };
 
@@ -378,6 +416,7 @@ impl ConsensusEngine {
         bytes.extend_from_slice(&header.timestamp.to_le_bytes());
         bytes.extend_from_slice(&header.height.to_le_bytes());
         bytes.extend_from_slice(&header.validator);
+        bytes.extend_from_slice(&header.validator_pubkey);
         bytes.extend_from_slice(&self.chain_id.to_le_bytes());
         bytes
     }
@@ -407,4 +446,58 @@ impl ConsensusEngine {
 pub enum ChainChoice {
     ChainA,
     ChainB,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{Account, StateDB};
+    use crate::types::TransactionType;
+    use ed25519_dalek::SigningKey;
+    use rand::rngs::OsRng;
+    use rand::RngCore;
+
+    #[test]
+    fn verify_transaction_checks_signature_and_chain_id() {
+        let state = Arc::new(StateDB::in_memory().expect("state"));
+        let engine = ConsensusEngine::new(1, Arc::clone(&state)).expect("engine");
+
+        let mut rng = OsRng;
+        let mut key_bytes = [0u8; 32];
+        rng.fill_bytes(&mut key_bytes);
+        let signing_key = SigningKey::from_bytes(&key_bytes);
+        let verifier = signing_key.verifying_key();
+        let from = ConsensusEngine::address_from_key(&verifier);
+        let to = [1u8; 32];
+
+        let account = Account {
+            address: from,
+            balance: crate::state::genesis::MIN_TX_FEE + 2,
+            nonce: 0,
+            code_hash: None,
+            storage_root: None,
+        };
+        state.put_account(&account).expect("account");
+
+        let mut tx = Transaction {
+            tx_type: TransactionType::Transfer,
+            from,
+            to,
+            value: 1,
+            data: vec![],
+            gas_limit: 0,
+            gas_price: 0,
+            nonce: 0,
+            chain_id: 1,
+            public_key: verifier.to_bytes(),
+            signature: ed25519_dalek::Signature::from_bytes(&[0u8; 64]),
+        };
+        let sign_bytes = tx.signing_bytes();
+        tx.signature = signing_key.sign(&sign_bytes);
+
+        engine.verify_transaction(&tx).expect("valid tx");
+
+        tx.chain_id = 2;
+        assert!(engine.verify_transaction(&tx).is_err());
+    }
 }

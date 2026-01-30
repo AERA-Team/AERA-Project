@@ -10,7 +10,7 @@ mod state;
 mod wallet;
 
 use config::{load_or_create, resolve_data_dir, save, AppConfig};
-use state::{load_or_default, save as save_state, MinerState};
+use state::{load_or_default, save as save_state};
 use wallet::KeyVault;
 
 #[derive(Parser)]
@@ -26,15 +26,13 @@ struct Cli {
 enum Commands {
   Init {
     #[arg(long)]
-    password: String,
-    #[arg(long)]
     data_dir: Option<String>,
+    #[arg(long, default_value_t = false)]
+    show_mnemonic: bool,
   },
   Import {
     #[arg(long)]
     mnemonic: String,
-    #[arg(long)]
-    password: String,
     #[arg(long)]
     data_dir: Option<String>,
   },
@@ -68,20 +66,25 @@ fn main() -> Result<()> {
   let mut config = load_or_create(&config_path)?;
 
   match cli.command {
-    Commands::Init { password, data_dir } => {
+    Commands::Init { data_dir, show_mnemonic } => {
       let data_dir = apply_data_dir(&mut config, &config_path, data_dir)?;
+      let password = prompt_password("Create wallet password: ")?;
       let (address, mnemonic) = init_wallet(&data_dir, &password)?;
       config.mining_address = address.clone();
       save(&config_path, &config)?;
       println!("Address: {}", address);
-      println!("Mnemonic: {}", mnemonic);
+      if show_mnemonic {
+        eprintln!("Mnemonic: {}", mnemonic);
+      } else {
+        eprintln!("Mnemonic hidden. Re-run with --show-mnemonic to display once.");
+      }
     }
     Commands::Import {
       mnemonic,
-      password,
       data_dir,
     } => {
       let data_dir = apply_data_dir(&mut config, &config_path, data_dir)?;
+      let password = prompt_password("Wallet password: ")?;
       let address = import_wallet(&data_dir, &mnemonic, &password)?;
       config.mining_address = address.clone();
       save(&config_path, &config)?;
@@ -204,6 +207,14 @@ fn show_status(data_dir: &Path) -> Result<()> {
     println!("started_at: {}", started_at);
   }
   Ok(())
+}
+
+fn prompt_password(prompt: &str) -> Result<String> {
+  let password = rpassword::prompt_password(prompt)?;
+  if password.len() < 8 {
+    return Err(anyhow!("Password must be at least 8 characters"));
+  }
+  Ok(password)
 }
 
 pub fn now_unix() -> u64 {

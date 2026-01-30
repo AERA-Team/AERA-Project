@@ -26,6 +26,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+use std::sync::OnceLock;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 // ============================================================================
@@ -188,12 +189,19 @@ impl DecryptedKey {
 
 const SERVICE_NAME: &str = "aera-wallet";
 const MASTER_KEY_ID: &str = "master-key";
+const SESSION_TTL_SECS: u64 = 30 * 60;
+const MAX_FAILED_ATTEMPTS: u32 = 5;
+const LOCKOUT_SECS: u64 = 60;
+static MASTER_KEY_CACHE: OnceLock<[u8; 32]> = OnceLock::new();
 
 pub struct SystemStore;
 
 impl SystemStore {
     /// Get the Master Key from the OS store, generate if not exists
     pub fn get_or_create_master_key() -> Result<[u8; 32], KeystoreError> {
+        if let Some(key) = MASTER_KEY_CACHE.get() {
+            return Ok(*key);
+        }
         let entry = Entry::new(SERVICE_NAME, MASTER_KEY_ID)
             .map_err(|e| KeystoreError::SystemStorage(e.to_string()))?;
 
@@ -203,6 +211,7 @@ impl SystemStore {
                 let mut key = [0u8; 32];
                 if bytes.len() == 32 {
                     key.copy_from_slice(&bytes);
+                    let _ = MASTER_KEY_CACHE.set(key);
                     Ok(key)
                 } else {
                     Err(KeystoreError::SystemStorage("Invalid Master Key length".to_string()))
@@ -216,7 +225,7 @@ impl SystemStore {
                 
                 entry.set_password(&hex_key)
                     .map_err(|e| KeystoreError::SystemStorage(format!("Failed to store Master Key: {}. Please ensure Wallet can access OS Credential Manager.", e)))?;
-                
+                let _ = MASTER_KEY_CACHE.set(key);
                 Ok(key)
             }
         }
@@ -235,6 +244,8 @@ pub struct KeyVault {
     mnemonics: HashMap<String, EncryptedMnemonic>,
     /// Active session data (zeroized on drop)
     active_session: Option<WalletSession>,
+    /// Failed unlock attempts
+    failed_attempts: HashMap<String, FailedAttempt>,
 }
 
 /// Active unlocked wallet session
@@ -246,12 +257,22 @@ pub struct WalletSession {
 
     /// Session encryption key
     pub session_key: Vec<u8>,
-    
-    /// Session password
-    pub session_password: Vec<u8>,
 
     /// Active mnemonic for dynamic address derivation
     pub mnemonic: Vec<u8>,
+
+    /// Derived seed from mnemonic + password
+    pub mnemonic_seed: Vec<u8>,
+
+    /// Session expiration time
+    #[zeroize(skip)]
+    pub expires_at: std::time::SystemTime,
+}
+
+#[derive(Debug, Clone)]
+struct FailedAttempt {
+    count: u32,
+    last_failed_at: std::time::SystemTime,
 }
 
 impl KeyVault {
@@ -268,6 +289,7 @@ impl KeyVault {
             kdf_params: KdfParams::default(),
             mnemonics: HashMap::new(),
             active_session: None,
+            failed_attempts: HashMap::new(),
         };
 
         // Load ALL wallet files in the directory
@@ -342,6 +364,7 @@ impl KeyVault {
                 .open(&primary_path)?;
             file.write_all(&data)?;
             file.sync_all()?;
+            set_strict_permissions(&primary_path)?;
             // Handle dropped here
         }
 
@@ -363,9 +386,10 @@ impl KeyVault {
                         .write(true)
                         .create(true)
                         .truncate(true)
-                        .open(individual_file)?;
+                        .open(&individual_file)?;
                     f.write_all(&json)?;
                     f.sync_all()?;
+                    set_strict_permissions(&individual_file)?;
                     // Handle dropped here
                 }
             }
@@ -381,14 +405,10 @@ impl KeyVault {
     /// Derive encryption key from password using Argon2id with specific parameters
     fn derive_key(password: &str, salt: &[u8], params: &KdfParams) -> Result<[u8; 32], KeystoreError> {
         // Argon2 requires a minimum salt length of 8 bytes.
-        let salt_to_use = if salt.len() < 8 {
-            let mut padded = vec![0u8; 8];
-            let len = salt.len().min(8);
-            padded[..len].copy_from_slice(&salt[..len]);
-            padded
-        } else {
-            salt.to_vec()
-        };
+        if salt.len() < 8 {
+            return Err(KeystoreError::Encryption("Salt too short".to_string()));
+        }
+        let salt_to_use = salt.to_vec();
 
         let argon2_params = Params::new(
             params.m_cost,
@@ -425,11 +445,11 @@ impl KeyVault {
         // 2. Get Master Key from System
         let master_key = SystemStore::get_or_create_master_key()?;
 
-        // 3. Combine keys (XOR) for actual encryption key
+        // 3. Combine keys (HKDF) for actual encryption key
+        let hk = hkdf::Hkdf::<sha2::Sha256>::new(Some(&master_key), &derived_password_key);
         let mut encryption_key = [0u8; 32];
-        for i in 0..32 {
-            encryption_key[i] = derived_password_key[i] ^ master_key[i];
-        }
+        hk.expand(b"aera-wallet-key", &mut encryption_key)
+            .map_err(|_| KeystoreError::Encryption("HKDF expand failed".to_string()))?;
 
         // 4. Generate random nonce
         let mut nonce_bytes = [0u8; 12];
@@ -487,11 +507,11 @@ impl KeyVault {
         // 2. Get Master Key from System
         let master_key = SystemStore::get_or_create_master_key()?;
 
-        // 3. Combine keys
+        // 3. Combine keys (HKDF)
+        let hk = hkdf::Hkdf::<sha2::Sha256>::new(Some(&master_key), &derived_password_key);
         let mut decryption_key = [0u8; 32];
-        for i in 0..32 {
-            decryption_key[i] = derived_password_key[i] ^ master_key[i];
-        }
+        hk.expand(b"aera-wallet-key", &mut decryption_key)
+            .map_err(|_| KeystoreError::Decryption("HKDF expand failed".to_string()))?;
 
         // 4. Decrypt with AES-256-GCM
         let cipher = Aes256Gcm::new_from_slice(&decryption_key)
@@ -546,16 +566,27 @@ impl KeyVault {
             return Err(KeystoreError::KeyNotFound("No wallet to unlock".to_string()));
         };
 
+        let lockout_key = entry.id.to_lowercase();
+        if self.is_locked_out(&lockout_key) {
+            return Err(KeystoreError::InvalidPassword);
+        }
+
         // 2. Derive session key from password (clean derivation)
         let session_key = Self::derive_key(password, &entry.salt, &entry.kdf_params)?;
 
         // 3. Verify password by attempting decryption
         let _decrypted = self.decrypt_key_hybrid(&entry, password)
             .or_else(|_| self.decrypt_key(&entry, password))
-            .map_err(|_| KeystoreError::InvalidPassword)?;
+            .map_err(|_| {
+                self.register_failed_attempt(&lockout_key);
+                KeystoreError::InvalidPassword
+            })?;
+
+        self.clear_failed_attempts(&lockout_key);
 
         // 4. Load mnemonic (if available) for derived addresses
         let mut mnemonic_bytes = Vec::new();
+        let mut mnemonic_seed = Vec::new();
 
         if let Some(mnemonic_obj) = self.mnemonics.get(&entry.id.to_lowercase()) {
             if let Ok(phrase_bytes) = self.decrypt_key_hybrid(&EncryptedKey {
@@ -569,8 +600,9 @@ impl KeyVault {
                 created_at: 0,
             }, password) {
                 if let Ok(phrase) = String::from_utf8(phrase_bytes.as_bytes().to_vec()) {
-                    if Bip39Mnemonic::parse(&phrase).is_ok() {
+                    if let Ok(mnemonic) = Bip39Mnemonic::parse(&phrase) {
                         mnemonic_bytes = phrase.as_bytes().to_vec();
+                        mnemonic_seed = mnemonic.to_seed(password).to_vec();
                     }
                 }
             }
@@ -580,8 +612,11 @@ impl KeyVault {
         self.active_session = Some(WalletSession {
             aera_address: entry.id.clone(),
             session_key: session_key.to_vec(),
-            session_password: password.as_bytes().to_vec(),
             mnemonic: mnemonic_bytes,
+            mnemonic_seed,
+            expires_at: std::time::SystemTime::now()
+                .checked_add(std::time::Duration::from_secs(SESSION_TTL_SECS))
+                .ok_or_else(|| KeystoreError::Encryption("Session expiry overflow".to_string()))?,
         });
     
         info!("🔓 Session unlocked for {}", entry.id);
@@ -598,9 +633,18 @@ impl KeyVault {
         info!("🔒 Session locked and cleared from memory.");
     }
 
+    fn active_session(&self) -> Result<&WalletSession, KeystoreError> {
+        let session = self.active_session.as_ref().ok_or(KeystoreError::SessionLocked)?;
+        let now = std::time::SystemTime::now();
+        if now > session.expires_at {
+            return Err(KeystoreError::SessionLocked);
+        }
+        Ok(session)
+    }
+
     /// Get session encryption key
     pub fn get_session_key(&self) -> Option<&[u8]> {
-        self.active_session.as_ref().map(|s| s.session_key.as_slice())
+        self.active_session().ok().map(|s| s.session_key.as_slice())
     }
 
     // ========================================================================
@@ -739,6 +783,7 @@ impl KeyVault {
     // ========================================================================
 
 
+    #[allow(dead_code)]
     fn derive_secp256k1_private_key_from_mnemonic(
         phrase: &str,
         password: &str,
@@ -747,13 +792,21 @@ impl KeyVault {
         let mnemonic = Bip39Mnemonic::parse(phrase)
             .map_err(|e| KeystoreError::Encryption(e.to_string()))?;
         let seed = mnemonic.to_seed(password);
+        Self::derive_secp256k1_private_key_from_seed(&seed, path)
+    }
+
+    fn derive_secp256k1_private_key_from_seed(
+        seed: &[u8],
+        path: &str,
+    ) -> Result<[u8; 32], KeystoreError> {
         let derivation_path = DerivationPath::from_str(path)
             .map_err(|e| KeystoreError::Encryption(e.to_string()))?;
-        let child = XPrv::derive_from_path(&seed, &derivation_path)
+        let child = XPrv::derive_from_path(seed, &derivation_path)
             .map_err(|e| KeystoreError::Encryption(e.to_string()))?;
         Ok(child.private_key().to_bytes().into())
     }
 
+    #[allow(dead_code)]
     fn derive_eth_address_from_mnemonic(
         phrase: &str,
         password: &str,
@@ -766,6 +819,15 @@ impl KeyVault {
         Self::secp256k1_to_eth_address(&priv_key)
     }
 
+    fn derive_eth_address_from_seed(seed: &[u8]) -> Result<String, KeystoreError> {
+        let priv_key = Self::derive_secp256k1_private_key_from_seed(
+            seed,
+            "m/44'/60'/0'/0/0",
+        )?;
+        Self::secp256k1_to_eth_address(&priv_key)
+    }
+
+    #[allow(dead_code)]
     fn derive_tron_address_from_mnemonic(
         phrase: &str,
         password: &str,
@@ -773,6 +835,14 @@ impl KeyVault {
         let priv_key = Self::derive_secp256k1_private_key_from_mnemonic(
             phrase,
             password,
+            "m/44'/195'/0'/0/0",
+        )?;
+        Self::secp256k1_to_tron_address(&priv_key)
+    }
+
+    fn derive_tron_address_from_seed(seed: &[u8]) -> Result<String, KeystoreError> {
+        let priv_key = Self::derive_secp256k1_private_key_from_seed(
+            seed,
             "m/44'/195'/0'/0/0",
         )?;
         Self::secp256k1_to_tron_address(&priv_key)
@@ -886,20 +956,12 @@ impl KeyVault {
             .ok_or_else(|| KeystoreError::KeyNotFound(key_id.to_string()))?;
 
         // Use provided password or session password
-        let effective_password = if !password.is_empty() {
-            password.to_string()
-        } else if let Some(session) = &self.active_session {
-            String::from_utf8(session.session_password.clone()).map_err(|_| KeystoreError::InvalidPassword)?
-        } else {
-            return Err(KeystoreError::SessionLocked);
-        };
-
-        if effective_password.is_empty() {
+        if password.is_empty() {
             return Err(KeystoreError::InvalidPassword);
         }
 
-        let decrypted = self.decrypt_key_hybrid(encrypted, &effective_password)
-            .or_else(|_| self.decrypt_key(encrypted, &effective_password))?;
+        let decrypted = self.decrypt_key_hybrid(encrypted, password)
+            .or_else(|_| self.decrypt_key(encrypted, password))?;
 
         let signature = match decrypted.algorithm {
             KeyAlgorithm::Ed25519 => {
@@ -1019,29 +1081,23 @@ impl KeyVault {
 
     /// Get first address for a specific purpose.
     pub fn get_address_by_purpose(&self, purpose: KeyPurpose) -> Option<String> {
-        if let Some(session) = &self.active_session {
+        if let Ok(session) = self.active_session() {
             match purpose {
                 KeyPurpose::Aera => return Some(session.aera_address.clone()),
                 KeyPurpose::Ethereum => {
-                    if !session.mnemonic.is_empty() {
-                        if let Ok(phrase) = String::from_utf8(session.mnemonic.clone()) {
-                            let password = String::from_utf8_lossy(&session.session_password).to_string();
-                            if let Ok(addr) = Self::derive_eth_address_from_mnemonic(&phrase, &password) {
-                                return Some(addr);
-                            }
-                            warn!("Failed to derive ETH address from mnemonic for active session");
+                    if !session.mnemonic_seed.is_empty() {
+                        if let Ok(addr) = Self::derive_eth_address_from_seed(&session.mnemonic_seed) {
+                            return Some(addr);
                         }
+                        warn!("Failed to derive ETH address from seed for active session");
                     }
                 }
                 KeyPurpose::Tron => {
-                    if !session.mnemonic.is_empty() {
-                        if let Ok(phrase) = String::from_utf8(session.mnemonic.clone()) {
-                            let password = String::from_utf8_lossy(&session.session_password).to_string();
-                            if let Ok(addr) = Self::derive_tron_address_from_mnemonic(&phrase, &password) {
-                                return Some(addr);
-                            }
-                            warn!("Failed to derive TRON address from mnemonic for active session");
+                    if !session.mnemonic_seed.is_empty() {
+                        if let Ok(addr) = Self::derive_tron_address_from_seed(&session.mnemonic_seed) {
+                            return Some(addr);
                         }
+                        warn!("Failed to derive TRON address from seed for active session");
                     }
                 }
                 _ => {}
@@ -1054,25 +1110,19 @@ impl KeyVault {
     }
 
     pub fn get_eth_private_key_from_session(&self) -> Result<[u8; 32], KeystoreError> {
-        let session = self.active_session.as_ref().ok_or(KeystoreError::SessionLocked)?;
-        if session.mnemonic.is_empty() {
+        let session = self.active_session()?;
+        if session.mnemonic_seed.is_empty() {
             return Err(KeystoreError::SessionLocked);
         }
-        let phrase = String::from_utf8(session.mnemonic.clone())
-            .map_err(|_| KeystoreError::Serialization("Invalid mnemonic UTF-8".to_string()))?;
-        let password = String::from_utf8_lossy(&session.session_password).to_string();
-        Self::derive_secp256k1_private_key_from_mnemonic(&phrase, &password, "m/44'/60'/0'/0/0")
+        Self::derive_secp256k1_private_key_from_seed(&session.mnemonic_seed, "m/44'/60'/0'/0/0")
     }
 
     pub fn get_tron_private_key_from_session(&self) -> Result<[u8; 32], KeystoreError> {
-        let session = self.active_session.as_ref().ok_or(KeystoreError::SessionLocked)?;
-        if session.mnemonic.is_empty() {
+        let session = self.active_session()?;
+        if session.mnemonic_seed.is_empty() {
             return Err(KeystoreError::SessionLocked);
         }
-        let phrase = String::from_utf8(session.mnemonic.clone())
-            .map_err(|_| KeystoreError::Serialization("Invalid mnemonic UTF-8".to_string()))?;
-        let password = String::from_utf8_lossy(&session.session_password).to_string();
-        Self::derive_secp256k1_private_key_from_mnemonic(&phrase, &password, "m/44'/195'/0'/0/0")
+        Self::derive_secp256k1_private_key_from_seed(&session.mnemonic_seed, "m/44'/195'/0'/0/0")
     }
 
     /// Check if key exists
@@ -1084,10 +1134,35 @@ impl KeyVault {
         self.mnemonics.contains_key(&address.to_lowercase())
     }
 
+    fn is_locked_out(&self, key_id: &str) -> bool {
+        if let Some(entry) = self.failed_attempts.get(key_id) {
+            if entry.count >= MAX_FAILED_ATTEMPTS {
+                if let Ok(elapsed) = std::time::SystemTime::now().duration_since(entry.last_failed_at) {
+                    return elapsed.as_secs() < LOCKOUT_SECS;
+                }
+            }
+        }
+        false
+    }
+
+    fn register_failed_attempt(&mut self, key_id: &str) {
+        let now = std::time::SystemTime::now();
+        let entry = self.failed_attempts.entry(key_id.to_string()).or_insert(FailedAttempt {
+            count: 0,
+            last_failed_at: now,
+        });
+        entry.count = entry.count.saturating_add(1);
+        entry.last_failed_at = now;
+    }
+
+    fn clear_failed_attempts(&mut self, key_id: &str) {
+        self.failed_attempts.remove(key_id);
+    }
+
     /// Get the first AERA address found in the vault
     pub fn get_first_address(&self) -> Option<String> {
         // 1. Check active session first
-        if let Some(session) = &self.active_session {
+        if let Ok(session) = self.active_session() {
             return Some(session.aera_address.clone());
         }
 
@@ -1114,6 +1189,19 @@ impl KeyVault {
         }
         Ok(())
     }
+}
+
+fn set_strict_permissions(path: &Path) -> Result<(), KeystoreError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

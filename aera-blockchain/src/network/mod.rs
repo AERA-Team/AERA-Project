@@ -39,6 +39,15 @@ pub const TOPIC_TRANSACTIONS: &str = "/aera/txs/1.0.0";
 pub const TOPIC_VOTES: &str = "/aera/votes/1.0.0";
 
 // ============================================================================
+// Limits / Defaults
+// ============================================================================
+
+const MAX_PEERS: usize = 128;
+const MAX_BLOCKS_PER_REQUEST: u32 = 256;
+const MAX_SYNC_REQUESTS_PER_MINUTE: u32 = 30;
+const DEFAULT_MAX_TRANSMIT_SIZE: usize = 2 * 1024 * 1024; // 2 MB
+
+// ============================================================================
 // Network Events (outbound to main loop)
 // ============================================================================
 
@@ -161,6 +170,8 @@ pub struct PeerInfo {
     pub addresses: Vec<Multiaddr>,
     pub chain_height: Option<u64>,
     pub last_seen: std::time::Instant,
+    pub sync_requests_in_window: u32,
+    pub sync_window_started: std::time::Instant,
 }
 
 // ============================================================================
@@ -185,6 +196,7 @@ impl NetworkService {
         let (event_tx, event_rx) = mpsc::channel(512);
         let (command_tx, command_rx) = mpsc::channel(512);
         let peers = Arc::new(RwLock::new(HashMap::new()));
+        let mdns_enabled = std::env::var("AERA_DISABLE_MDNS").is_err();
 
         // Generate node keypair
         let local_key = libp2p::identity::Keypair::generate_ed25519();
@@ -203,6 +215,7 @@ impl NetworkService {
             event_tx,
             command_rx,
             peers_clone,
+            mdns_enabled,
         ));
 
         Ok(Self {
@@ -235,7 +248,7 @@ impl NetworkService {
                     .heartbeat_interval(Duration::from_secs(1))
                     .validation_mode(gossipsub::ValidationMode::Strict)
                     .message_id_fn(message_id_fn)
-                    .max_transmit_size(10 * 1024 * 1024) // 10 MB for blocks
+                    .max_transmit_size(DEFAULT_MAX_TRANSMIT_SIZE)
                     .build()
                     .expect("Valid gossipsub config");
 
@@ -298,6 +311,7 @@ impl NetworkService {
         event_tx: mpsc::Sender<NetworkEvent>,
         mut command_rx: mpsc::Receiver<NetworkCommand>,
         peers: Arc<RwLock<HashMap<PeerId, PeerInfo>>>,
+        mdns_enabled: bool,
     ) {
         // Subscribe to gossipsub topics
         let blocks_topic = IdentTopic::new(TOPIC_BLOCKS);
@@ -323,7 +337,7 @@ impl NetworkService {
             tokio::select! {
                 // Handle libp2p swarm events
                 event = swarm.select_next_some() => {
-                    Self::handle_swarm_event(&mut swarm, event, &event_tx, &peers).await;
+                    Self::handle_swarm_event(&mut swarm, event, &event_tx, &peers, mdns_enabled).await;
                 }
                 
                 // Handle commands from main application
@@ -352,6 +366,7 @@ impl NetworkService {
         event: SwarmEvent<AeraBehaviourEvent>,
         event_tx: &mpsc::Sender<NetworkEvent>,
         peers: &Arc<RwLock<HashMap<PeerId, PeerInfo>>>,
+        mdns_enabled: bool,
     ) {
         match event {
             // New listen address
@@ -361,6 +376,13 @@ impl NetworkService {
 
             // Connection established
             SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
+                let peer_count = peers.read().await.len();
+                if peer_count >= MAX_PEERS {
+                    warn!("Peer limit reached ({}). Rejecting {}", MAX_PEERS, peer_id);
+                    swarm.disconnect_peer_id(peer_id).ok();
+                    return;
+                }
+
                 info!("🔗 Connected to peer: {}", peer_id);
                 
                 // Track peer
@@ -370,6 +392,8 @@ impl NetworkService {
                     addresses: vec![addr.clone()],
                     chain_height: None,
                     last_seen: std::time::Instant::now(),
+                    sync_requests_in_window: 0,
+                    sync_window_started: std::time::Instant::now(),
                 });
 
                 // Add to Kademlia
@@ -417,6 +441,9 @@ impl NetworkService {
 
             // mDNS peer discovery
             SwarmEvent::Behaviour(AeraBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
+                if !mdns_enabled {
+                    return;
+                }
                 for (peer_id, addr) in list {
                     debug!("🔍 mDNS discovered: {} at {}", peer_id, addr);
                     swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
@@ -425,6 +452,9 @@ impl NetworkService {
             }
             
             SwarmEvent::Behaviour(AeraBehaviourEvent::Mdns(mdns::Event::Expired(list))) => {
+                if !mdns_enabled {
+                    return;
+                }
                 for (peer_id, _) in list {
                     debug!("mDNS peer expired: {}", peer_id);
                 }
@@ -448,13 +478,29 @@ impl NetworkService {
                     // Incoming request - forward to main loop to get blocks
                     request_response::Message::Request { request, channel, .. } => {
                         debug!("📥 Sync request from {}: {:?}", peer, request);
+                        {
+                            let mut peers_guard = peers.write().await;
+                            if let Some(info) = peers_guard.get_mut(&peer) {
+                                let elapsed = info.sync_window_started.elapsed();
+                                if elapsed > Duration::from_secs(60) {
+                                    info.sync_window_started = std::time::Instant::now();
+                                    info.sync_requests_in_window = 0;
+                                }
+                                if info.sync_requests_in_window >= MAX_SYNC_REQUESTS_PER_MINUTE {
+                                    warn!("Rate limit exceeded for peer {}", peer);
+                                    return;
+                                }
+                                info.sync_requests_in_window += 1;
+                            }
+                        }
                         
                         match request {
                             SyncRequest::GetBlocks { from_height, count } => {
+                                let bounded_count = std::cmp::min(count, MAX_BLOCKS_PER_REQUEST);
                                 let _ = event_tx.send(NetworkEvent::BlocksRequested {
                                     peer,
                                     from_height,
-                                    count,
+                                    count: bounded_count,
                                     channel: SyncResponseChannel(channel),
                                 }).await;
                             }

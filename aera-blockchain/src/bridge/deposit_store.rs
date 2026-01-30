@@ -193,7 +193,6 @@ pub struct DepositStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::Address;
 
     fn create_test_deposit(id: u8) -> Deposit {
         Deposit {

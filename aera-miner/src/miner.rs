@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use crate::state::{load_or_default, save as save_state, MinerState};
+use crate::state::{load_or_default, save as save_state};
 
 const HASH_BATCH: u64 = 50_000;
 const REPORT_INTERVAL: Duration = Duration::from_secs(1);

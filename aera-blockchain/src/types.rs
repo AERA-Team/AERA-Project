@@ -38,6 +38,8 @@ pub struct BlockHeader {
     pub height: BlockHeight,
     /// Validator who produced this block
     pub validator: Address,
+    /// Validator public key (ed25519, 32 bytes)
+    pub validator_pubkey: [u8; 32],
     /// Validator's signature over block header
     #[serde(with = "signature_serde")]
     pub signature: Signature,
@@ -90,6 +92,8 @@ pub struct Transaction {
     pub nonce: Nonce,
     /// Chain ID for replay protection
     pub chain_id: u32,
+    /// Sender public key (ed25519, 32 bytes)
+    pub public_key: [u8; 32],
     /// Transaction signature
     #[serde(with = "signature_serde")]
     pub signature: Signature,
@@ -103,6 +107,38 @@ impl Transaction {
         let mut hasher = Sha256::new();
         hasher.update(&encoded);
         hasher.finalize().into()
+    }
+
+    /// Bytes that must be signed (excludes signature)
+    pub fn signing_bytes(&self) -> Vec<u8> {
+        #[derive(Serialize)]
+        struct SignableTx<'a> {
+            tx_type: &'a TransactionType,
+            from: &'a Address,
+            to: &'a Address,
+            value: Amount,
+            data: &'a [u8],
+            gas_limit: u64,
+            gas_price: u64,
+            nonce: Nonce,
+            chain_id: u32,
+            public_key: [u8; 32],
+        }
+
+        let signable = SignableTx {
+            tx_type: &self.tx_type,
+            from: &self.from,
+            to: &self.to,
+            value: self.value,
+            data: &self.data,
+            gas_limit: self.gas_limit,
+            gas_price: self.gas_price,
+            nonce: self.nonce,
+            chain_id: self.chain_id,
+            public_key: self.public_key,
+        };
+
+        bincode::serialize(&signable).unwrap_or_default()
     }
 }
 

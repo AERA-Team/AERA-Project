@@ -124,6 +124,7 @@ pub fn create_genesis_block(config: &GenesisConfig) -> Block {
         timestamp: config.timestamp,
         height: 0,
         validator: address_from_string(GENESIS_VALIDATOR_ADDRESS),
+        validator_pubkey: [0u8; 32],
         signature: Signature::from_bytes(&[0u8; 64]),
     };
 

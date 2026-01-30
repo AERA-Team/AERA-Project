@@ -33,6 +33,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 // ============================================================================
 
 #[derive(Debug, Error)]
+#[allow(dead_code)]
 pub enum KeystoreError {
     #[error("Invalid password")]
     InvalidPassword,
@@ -172,6 +173,7 @@ pub struct DecryptedKey {
     algorithm: KeyAlgorithm,
 }
 
+#[allow(dead_code)]
 impl DecryptedKey {
     /// Get key bytes (use carefully - copies data)
     pub fn as_bytes(&self) -> &[u8] {
@@ -188,7 +190,7 @@ impl DecryptedKey {
 // System Storage (Master Key Logic)
 // ============================================================================
 
-const SERVICE_NAME: &str = "aera-wallet";
+const SERVICE_NAME: &str = "aera-miner";
 const MASTER_KEY_ID: &str = "master-key";
 
 pub struct SystemStore;
@@ -260,6 +262,7 @@ pub struct WalletSession {
     pub mnemonic: Vec<u8>,
 }
 
+#[allow(dead_code)]
 impl KeyVault {
     /// Create or open a KeyVault in the specified directory
     pub fn open<P: AsRef<Path>>(dir: P) -> Result<Self, KeystoreError> {
@@ -1328,8 +1331,8 @@ mod tests {
 
     #[test]
     fn test_ton_derivation_uniqueness() {
-        let mnemonic1 = Mnemonic::parse("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap();
-        let mnemonic2 = Mnemonic::parse("all all all all all all all all all all all all").unwrap();
+        let _mnemonic1 = Mnemonic::parse("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap();
+        let _mnemonic2 = Mnemonic::parse("all all all all all all all all all all all all").unwrap();
         
         let (addr1, _) = KeyVault::derive_ton_address("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about", "").unwrap();
         let (addr2, _) = KeyVault::derive_ton_address("all all all all all all all all all all all all", "").unwrap();

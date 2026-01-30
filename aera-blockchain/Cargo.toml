@@ -36,6 +36,7 @@ bincode = "^1.3"
 # Cryptography
 ed25519-dalek = { version = "^2.1", features = ["serde"] }
 sha2 = "^0.10"
+hkdf = "^0.12"
 rand = "^0.8"
 bip39 = { version = "^2.0", features = ["rand"] }
 
