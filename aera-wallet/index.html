@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AERA Wallet</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Inter:wght@300;400;600&display=swap"
+    rel="stylesheet">
+</head>
+
+<body>
+  <div id="app">
+    <div class="bg-blur"></div>
+
+    <!-- Dashboard (Initially Hidden) -->
+    <main class="glass-panel" id="main-dashboard" style="display: none;">
+      <header>
+        <div class="logo">
+          <span class="aera-text-gold">AERA</span>
+          <span class="wallet-text">WALLET</span>
+        </div>
+        <div class="header-actions">
+          <button class="icon-btn" id="btn-settings" title="Settings">⚙️</button>
+        </div>
+      </header>
+
+      <div class="scroll-container">
+        <section class="balance-card">
+          <h3>Total Balance</h3>
+          <div class="main-balance" id="balance-amount">0.00 AERA</div>
+          <div class="wallet-address" id="address-text">Address not generated</div>
+          <div class="actions">
+            <button class="btn btn-primary btn-sm" id="btn-receive">Receive</button>
+            <button class="btn btn-primary btn-sm" id="btn-send-toggle">Send</button>
+          </div>
+        </section>
+
+        <!-- Send Form (Hidden) -->
+        <section id="send-section" class="send-panel">
+          <label id="active-network-indicator" class="active-network-tag">AERA Network</label>
+          <div class="form-group">
+            <label>Recipient Address</label>
+            <input type="text" id="send-to" placeholder="Address..." />
+          </div>
+          <div class="form-group">
+            <label>Amount (<span id="currency-label">AERA</span>)</label>
+            <input type="number" id="send-amount" placeholder="0.00" />
+          </div>
+          <div class="fee-hint" id="fee-hint">Network fee balance: —</div>
+          <button class="btn btn-glow" id="btn-send-execute">Confirm Transaction</button>
+          <button class="btn-link" id="btn-send-cancel">Cancel</button>
+        </section>
+
+        <section class="tabs">
+          <button class="tab-link active" data-tab="assets">Assets</button>
+          <button class="tab-link" data-tab="mining">Mining</button>
+          <button class="tab-link" data-tab="bridge">Bridge</button>
+          <button class="tab-link" data-tab="activity">Activity</button>
+        </section>
+
+        <div id="tab-content">
+          <div id="assets" class="tab-pane active">
+            <div class="asset-section" data-section="native">
+              <button class="asset-section-toggle" type="button" aria-expanded="true">
+                Native Assets
+                <span class="asset-section-caret">▾</span>
+              </button>
+              <div class="asset-section-content">
+                <div class="asset-item" onclick="switchNetwork('aera')">
+                  <div class="asset-icon aera-logo">
+                    <img class="asset-logo-img" src="/src-tauri/icons/icon.png" alt="AERA logo" />
+                  </div>
+                <div class="asset-info">
+                  <span class="asset-name">AERA (Native)</span>
+                  <span class="asset-balance" id="asset-aera-val">0.00 AERA</span>
+                </div>
+                <span class="asset-tag">AERA</span>
+                </div>
+                <div class="asset-item" onclick="switchNetwork('eth')">
+                  <div class="asset-icon eth">
+                    <svg viewBox="0 0 64 64" aria-hidden="true">
+                      <polygon class="icon-fill" points="32,6 14,32 32,58 50,32" />
+                      <polygon class="icon-cut" points="32,6 14,32 32,40 50,32" />
+                      <polyline class="icon-stroke" points="32,6 14,32 32,40 50,32 32,6" />
+                    </svg>
+                  </div>
+                  <div class="asset-info">
+                    <span class="asset-name">Ethereum (Native)</span>
+                    <span class="asset-balance" id="asset-native-eth-val">0.00 ETH</span>
+                  </div>
+                  <span class="asset-tag">ETH</span>
+                </div>
+                <div class="asset-item" onclick="switchNetwork('tron_native')">
+                  <div class="asset-icon tron">
+                    <svg viewBox="0 0 64 64" aria-hidden="true">
+                      <polygon class="icon-fill" points="10,10 54,22 28,56" />
+                      <polyline class="icon-stroke" points="10,10 28,56 54,22 10,10" />
+                      <line class="icon-line" x1="22" y1="16" x2="44" y2="26" />
+                    </svg>
+                  </div>
+                  <div class="asset-info">
+                    <span class="asset-name">TRON (Native)</span>
+                    <span class="asset-balance" id="asset-trx-val">0.00 TRX</span>
+                  </div>
+                  <span class="asset-tag">TRX</span>
+                </div>
+              </div>
+            </div>
+            <div class="asset-section" data-section="stable">
+              <button class="asset-section-toggle" type="button" aria-expanded="true">
+                Stablecoins
+                <span class="asset-section-caret">▾</span>
+              </button>
+              <div class="asset-section-content">
+                <div class="asset-item" onclick="switchNetwork('bridge_eth')">
+                  <div class="asset-icon eth-usdt">
+                    <svg viewBox="0 0 64 64" aria-hidden="true">
+                      <circle class="icon-stroke" cx="32" cy="32" r="22" />
+                      <path class="icon-fill" d="M18 22h28v6H36v18h-8V28H18z" />
+                      <line class="icon-line" x1="20" y1="32" x2="44" y2="32" />
+                    </svg>
+                  </div>
+                  <div class="asset-info">
+                    <span class="asset-name">USDT (ERC-20)</span>
+                    <span class="asset-balance" id="asset-eth-val">0.00 USDT</span>
+                  </div>
+                  <span class="asset-tag">ERC-20</span>
+                </div>
+                <div class="asset-item" onclick="switchNetwork('tron')">
+                  <div class="asset-icon tron">
+                    <svg viewBox="0 0 64 64" aria-hidden="true">
+                      <circle class="icon-stroke" cx="32" cy="32" r="22" />
+                      <path class="icon-fill" d="M18 22h28v6H36v18h-8V28H18z" />
+                      <line class="icon-line" x1="20" y1="32" x2="44" y2="32" />
+                    </svg>
+                  </div>
+                  <div class="asset-info">
+                    <span class="asset-name">USDT (TRON)</span>
+                    <span class="asset-balance" id="asset-tron-val">0.00 USDT</span>
+                  </div>
+                  <span class="asset-tag">TRC-20</span>
+                </div>
+                <div class="asset-item disabled" aria-disabled="true">
+                  <div class="asset-icon aera-logo aera-usdt">
+                    <img class="asset-logo-img" src="/src-tauri/icons/icon.png" alt="AERA logo" />
+                    <span class="asset-logo-badge">USDT</span>
+                  </div>
+                  <div class="asset-info">
+                    <span class="asset-name">USDT (AERA)</span>
+                    <span class="asset-balance" id="asset-aera-usdt-val">0.00 USDT</span>
+                  </div>
+                  <span class="asset-tag">Unavailable</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="activity" class="tab-pane">
+            <div class="activity-container" id="activity-list">
+              <div class="loading-spinner" style="text-align: center; padding: 20px; opacity: 0.5;">No activity found
+              </div>
+            </div>
+          </div>
+
+          <div id="bridge" class="tab-pane">
+            <div class="bridge-grid">
+              <div class="bridge-card">
+                <div class="bridge-title">Bridge</div>
+                <div class="bridge-subtitle">
+                  Use <strong>Receive</strong> to copy your address, and <strong>Send</strong> to transfer assets.
+                </div>
+                <p class="bridge-hint">Network fees are paid in ETH / TRX / TON depending on the selected network.</p>
+              </div>
+            </div>
+          </div>
+
+          <div id="mining" class="tab-pane">
+            <div class="mining-dashboard">
+              <div class="mining-stats-grid">
+                <div class="stat-card">
+                  <span class="stat-label">Hashrate</span>
+                  <span class="stat-value" id="mine-hashrate">0.0 H/s</span>
+                </div>
+                <div class="stat-card">
+                  <span class="stat-label">Blocks Mined</span>
+                  <span class="stat-value" id="mine-blocks">0</span>
+                </div>
+                <div class="stat-card">
+                  <span class="stat-label">Block Reward</span>
+                  <span class="stat-value" id="mine-reward">200 AERA</span>
+                </div>
+                <div class="stat-card">
+                  <span class="stat-label">Difficulty</span>
+                  <span class="stat-value" id="mine-difficulty">16</span>
+                </div>
+                <div class="stat-card full-width">
+                  <span class="stat-label">Node Status</span>
+                  <span class="stat-value success" id="mine-node-status">api.aera.network</span>
+                </div>
+              </div>
+
+              <div class="mining-controls">
+                <button class="btn btn-glow" id="btn-start-mining">Start Mining</button>
+                <button class="btn btn-danger" id="btn-stop-mining" style="display: none;">Stop Mining</button>
+                <p class="mining-hint">Mining runs in a separate high-performance thread using SHA-256 algorithm.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Settings Modal -->
+        <div id="settings-modal" class="modal">
+          <div class="modal-content glass-panel">
+            <h2>Settings</h2>
+            <hr class="modal-divider" />
+            <div class="setting-item">
+              <span class="label">Node Status</span>
+              <span class="value" id="settings-node-status">—</span>
+            </div>
+            <div class="setting-item">
+              <span class="label">Network</span>
+              <span class="value" id="settings-network">—</span>
+            </div>
+            <hr class="modal-divider" />
+            <button class="btn btn-danger btn-compact" id="btn-logout">Logout</button>
+            <button class="btn-link btn-link-compact" id="btn-close-settings">Close</button>
+          </div>
+        </div>
+
+        <!-- Receive Modal -->
+        <div id="receive-modal" class="modal">
+          <div class="modal-content glass-panel">
+            <h2 id="receive-title">Receive Assets</h2>
+            <p class="modal-subtitle" id="receive-network-name">AERA Network</p>
+            <hr class="modal-divider" />
+            <div class="qr-container">
+              <canvas id="qr-canvas"></canvas>
+            </div>
+            <div class="address-copy-box" id="receive-address-full">Address not generated</div>
+            <p class="small-hint">Scan to receive or copy address</p>
+            <hr class="modal-divider" />
+            <button class="btn btn-secondary-outline" id="btn-close-receive">Close</button>
+          </div>
+        </div>
+
+        <!-- Send Password Modal (secure, no prompt()) -->
+        <div id="send-password-modal" class="modal">
+          <div class="modal-content glass-panel">
+            <h2>Confirm Transaction</h2>
+            <p class="modal-subtitle">Enter password to sign</p>
+            <hr class="modal-divider" />
+            <div class="form-group">
+              <input type="password" id="send-password-input" placeholder="Password" autocomplete="off" />
+            </div>
+            <button class="btn btn-glow" id="btn-send-password-confirm">Sign & Send</button>
+            <button class="btn-link" id="btn-send-password-cancel">Cancel</button>
+          </div>
+        </div>
+
+        <footer>
+          <div class="node-info">
+            <span>Blocks: <span id="block-height">0</span></span>
+            <span>Peers: <span id="peer-count">0</span></span>
+          </div>
+        </footer>
+      </div>
+    </main>
+
+    <!-- Auth Stack -->
+    <div id="auth-container" class="full-screen">
+
+      <!-- Phase 1: Init Node -->
+      <div id="init-panel" class="auth-panel glass-panel animate-in">
+        <div class="logo large"><span class="aera-text-gold">AERA</span></div>
+        <h2>Welcome to AERA</h2>
+        <p>Initialize your node to continue.</p>
+        <div class="form-group">
+          <label>Data Directory</label>
+          <input type="text" id="data-dir" value="" placeholder="Resolving default path..." />
+        </div>
+        <button class="btn btn-primary" id="btn-init">Initialize Node</button>
+      </div>
+
+      <!-- Phase 1.5: Login (Fast Entry) -->
+      <div id="login-panel" class="auth-panel glass-panel" style="display: none;">
+        <div class="logo large"><span class="aera-text-gold">AERA</span></div>
+        <h2 id="login-title">Unlock Wallet</h2>
+        <div class="wallet-identity-box">
+          <label class="small-label">Login Address</label>
+          <input type="text" id="login-address-input" class="wallet-address-input" placeholder="aera1..."
+            autocomplete="off" list="available-addresses" />
+          <datalist id="available-addresses"></datalist>
+        </div>
+        <p>Enter your password to access your AERA assets.</p>
+        <div class="form-group">
+          <input type="password" id="login-pw" placeholder="Password" autocomplete="new-password" />
+        </div>
+        <button class="btn btn-glow btn-compact" id="btn-do-login">Unlock AERA</button>
+        <div class="login-meta-actions">
+          <button class="btn-link btn-link-compact" id="btn-switch-wallet">Add New Wallet</button>
+        </div>
+      </div>
+
+      <!-- Phase 2: Wallet Selection -->
+      <div id="selection-panel" class="auth-panel glass-panel" style="display: none;">
+        <h2>Secure Your Assets</h2>
+        <p>Choose how you want to access AERA.</p>
+        <button class="btn btn-glow" id="btn-go-create">Create New Wallet</button>
+        <p class="divider"><span>OR</span></p>
+        <button class="btn btn-secondary" id="btn-go-import">Import from Mnemonic</button>
+      </div>
+
+      <!-- Phase 3a: Create Wallet (Password) -->
+      <div id="create-pw-panel" class="auth-panel glass-panel" style="display: none;">
+        <h2>Create Password</h2>
+        <p>This password will encrypt your local wallet file.</p>
+        <div class="form-group">
+          <input type="password" id="create-pw" placeholder="New Password" />
+        </div>
+        <button class="btn btn-primary" id="btn-do-create">Generate Wallet</button>
+        <button class="btn-link" onclick="showPanel('selection-panel')">Back</button>
+      </div>
+
+      <!-- Phase 3b: Backup Mnemonic -->
+      <div id="backup-panel" class="auth-panel glass-panel" style="display: none;">
+        <h2 class="aera-text-gold">Recovery Phrase</h2>
+        <div class="warning-box">
+          <p>⚠️ <strong>IMPORTANT</strong></p>
+          <p>Write these 12 words down on paper. If you lose them, your funds are gone forever.</p>
+        </div>
+        <div class="mnemonic-grid" id="mnemonic-display">
+          <!-- Words go here -->
+        </div>
+        <button class="btn btn-glow" id="btn-backup-confirm">I have written it down</button>
+      </div>
+
+      <!-- Phase 3c: Import Wallet -->
+      <div id="import-panel" class="auth-panel glass-panel" style="display: none;">
+        <h2>Import Wallet</h2>
+        <p>Enter your 12-word recovery phrase.</p>
+        <textarea id="import-phrase" placeholder="word1 word2 ... word12" rows="4"></textarea>
+        <div class="form-group">
+          <label>Keystore Password</label>
+          <input type="password" id="import-pw" placeholder="Encryption Password" />
+        </div>
+        <button class="btn btn-primary" id="btn-do-import">Import & Unlock</button>
+        <button class="btn-link" onclick="showPanel('selection-panel')">Back</button>
+      </div>
+
+    </div>
+
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+
+</html>

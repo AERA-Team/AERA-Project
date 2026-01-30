@@ -1,0 +1,12 @@
+# Rust matches
+target/
+**/*.rs.bk
+
+# AERA Specific
+config.toml
+aera-data/
+*.db
+keystore.json
+
+# Logs
+*.log

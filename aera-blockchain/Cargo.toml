@@ -1,0 +1,95 @@
+[package]
+name = "aera-blockchain"
+version = "0.1.0"
+edition = "2021"
+authors = ["AERA Team"]
+description = "AERA L1 Blockchain with EVM compatibility and cross-chain integration"
+license = "MIT"
+repository = "https://github.com/aera/aera-blockchain"
+
+[dependencies]
+tauri = { version = "^2.0", features = [] }
+# Async runtime
+tokio = { version = "^1.35", features = ["full"] }
+
+# P2P networking
+libp2p = { version = "^0.53", features = [
+    "tokio",
+    "tcp",
+    "noise",
+    "yamux",
+    "gossipsub",
+    "kad",
+    "identify",
+    "ping",
+    "mdns",
+    "request-response",
+    "cbor",
+    "macros"
+] }
+
+# Serialization
+serde = { version = "^1.0", features = ["derive"] }
+serde_json = "^1.0"
+bincode = "^1.3"
+
+# Cryptography
+ed25519-dalek = { version = "^2.1", features = ["serde"] }
+sha2 = "^0.10"
+rand = "^0.8"
+bip39 = { version = "^2.0", features = ["rand"] }
+
+# Storage
+sled = "^0.34"
+
+# Logging
+tracing = "^0.1"
+tracing-subscriber = { version = "^0.3", features = ["env-filter"] }
+
+# CLI
+clap = { version = "^4.4", features = ["derive"] }
+
+# Ethereum integration
+ethers = { version = "^2.0", default-features = false, features = ["rustls", "abigen"] }
+hex = "^0.4"
+
+# Key management
+argon2 = "^0.5"
+aes-gcm = "^0.10"
+zeroize = { version = "^1.7", features = ["derive"] }
+
+# EVM (for future compatibility)
+revm = { version = "^3.5", default-features = false, features = ["std", "serde"] }
+
+# Error handling
+thiserror = "^1.0"
+anyhow = "^1.0"
+
+# Time
+chrono = "^0.4"
+
+# HTTP client for chain APIs
+reqwest = { version = "^0.11", default-features = false, features = ["json", "rustls-tls"] }
+
+# UUID for keystore
+uuid = { version = "^1.6", features = ["v4"] }
+toml = "^0.9"
+base64 = "^0.22"
+
+# TRON Integration
+bs58 = "^0.5"           # Base58 encoding for TRON addresses
+keyring = "^2.3"        # System-level credential storage
+bip32 = "0.5.3"
+k256 = { version = "^0.13", features = ["ecdsa", "ecdsa-core", "sha256"] }
+secp256k1 = { version = "^0.28", features = ["recovery"] }
+
+[dev-dependencies]
+tempfile = "3.10"
+
+[[bin]]
+name = "aera-node"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = true

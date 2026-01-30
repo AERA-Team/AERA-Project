@@ -1,0 +1,37 @@
+[package]
+name = "aera-miner"
+version = "0.1.0"
+edition = "2021"
+authors = ["AERA Team"]
+description = "AERA Mining Utility compatible with AERA Wallet"
+license = "MIT"
+
+[dependencies]
+anyhow = "^1.0"
+clap = { version = "^4.4", features = ["derive"] }
+serde = { version = "^1.0", features = ["derive"] }
+serde_json = "^1.0"
+toml = "^0.9"
+tracing = "^0.1"
+
+argon2 = "^0.5"
+aes-gcm = "^0.10"
+ed25519-dalek = { version = "^2.1", features = ["serde"] }
+sha2 = "^0.10"
+rand = "^0.8"
+bip39 = { version = "^2.0", features = ["rand"] }
+hex = "^0.4"
+zeroize = { version = "^1.7", features = ["derive"] }
+thiserror = "^1.0"
+bs58 = "^0.5"
+hmac = "^0.12"
+keyring = "^2.3"
+bip32 = "0.5.3"
+ethers = { version = "^2.0", default-features = false, features = ["rustls", "abigen"] }
+
+[dev-dependencies]
+tempfile = "3.10"
+
+[[bin]]
+name = "aera-miner"
+path = "src/main.rs"

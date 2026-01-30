@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AERA Miner Status",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["running", "address", "hashrate", "blocks_mined", "total_rewards", "started_at"],
+  "properties": {
+    "running": { "type": "boolean" },
+    "address": { "type": "string" },
+    "hashrate": { "type": "number" },
+    "blocks_mined": { "type": "integer", "minimum": 0 },
+    "total_rewards": { "type": "integer", "minimum": 0 },
+    "started_at": { "type": ["integer", "null"] }
+  }
+}

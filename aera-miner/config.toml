@@ -1,0 +1,3 @@
+data_dir = "./data"
+node_url = "http://127.0.0.1:3030"
+mining_address = "aera17e6912075496ea0b56e4d7772b52247cba19071158149d6f220a484b979c627d"

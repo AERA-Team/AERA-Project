@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AERA Miner Config",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["data_dir", "node_url", "mining_address"],
+  "properties": {
+    "data_dir": { "type": "string" },
+    "node_url": { "type": "string" },
+    "mining_address": { "type": "string" }
+  }
+}
