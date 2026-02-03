@@ -7,6 +7,21 @@ on:
     branches: [ main, master ]
 
 jobs:
+  backend:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: aera-blockchain
+      - name: Backend - cargo check
+        working-directory: ./aera-blockchain
+        run: cargo check
+      - name: Backend - cargo test (lib)
+        working-directory: ./aera-blockchain
+        run: cargo test --lib
+
   build-and-test:
     runs-on: ubuntu-latest
 
