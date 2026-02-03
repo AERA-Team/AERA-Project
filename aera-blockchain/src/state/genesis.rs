@@ -52,6 +52,9 @@ pub const DEVELOPER_ADDRESS: &str = "aera1a01b2ebe0c1965b443d53291f597ba2b210e8f
 /// Mining rewards address
 pub const MINING_REWARDS_ADDRESS: &str = "aera10000000000000000000000000000000000000000000000000000000000000000";
 
+/// Mining rewards address as bytes (genesis zero-address for mining pool)
+pub const MINING_REWARDS_ADDRESS_BYTES: Address = [0u8; 32];
+
 /// Genesis validator address (trusted for chain fork protection)
 pub const GENESIS_VALIDATOR_ADDRESS: &str = "aera1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
 

@@ -6,8 +6,10 @@ use tracing::{info, error};
 use serde::{Serialize, Deserialize};
 
 /// Economic constants for AERA Mining
-pub const MAX_MINING_SUPPLY: f64 = 4_000_000_000.0;
-pub const INITIAL_REWARD: f64 = 200.0;
+pub const MINING_DECIMALS: u32 = 18;
+pub const MINING_DECIMAL_FACTOR: u128 = 10u128.pow(MINING_DECIMALS);
+pub const MAX_MINING_SUPPLY: u128 = 4_000_000_000u128 * MINING_DECIMAL_FACTOR;
+pub const INITIAL_REWARD: u128 = 200u128 * MINING_DECIMAL_FACTOR;
 pub const HALVING_INTERVAL: u64 = 2_102_400; // ~4 years at 60s blocks
 
 /// Target block time in seconds
@@ -29,7 +31,7 @@ pub struct MiningStats {
 }
 
 /// Callback type for block found events
-pub type BlockFoundCallback = Arc<dyn Fn(String, f64) + Send + Sync>;
+pub type BlockFoundCallback = Arc<dyn Fn(String, u128) + Send + Sync>;
 
 /// AERA Mining Manager (SHA-256 with PoW)
 pub struct MiningManager {
@@ -72,7 +74,7 @@ impl MiningManager {
     /// Set callback for when a block is found
     pub fn set_block_found_callback<F>(&self, callback: F)
     where
-        F: Fn(String, f64) + Send + Sync + 'static,
+        F: Fn(String, u128) + Send + Sync + 'static,
     {
         match self.block_found_callback.lock() {
             Ok(mut cb) => {
@@ -128,8 +130,12 @@ impl MiningManager {
                     let new_block_count = blocks_mined.fetch_add(1, Ordering::SeqCst) + 1;
                     let reward = Self::calculate_reward_static(new_block_count);
                     
-                    info!("🎉 Block #{} found! Hash: {}, Reward: {} AERA", 
-                          new_block_count, hex::encode(&hash[..8]), reward);
+                    info!(
+                        "🎉 Block #{} found! Hash: {}, Reward: {:.6} AERA",
+                        new_block_count,
+                        hex::encode(&hash[..8]),
+                        reward as f64 / MINING_DECIMAL_FACTOR as f64
+                    );
                     
                     // Record block time
                     let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
@@ -225,23 +231,27 @@ impl MiningManager {
         MiningStats {
             hashrate: self.hashrate.load(Ordering::SeqCst) as f64,
             blocks_mined: total_blocks,
-            current_reward: if total_blocks >= 20_000_000 { 0.0 } else { reward },
+            current_reward: if total_blocks >= 20_000_000 {
+                0.0
+            } else {
+                reward as f64 / MINING_DECIMAL_FACTOR as f64
+            },
             is_active: self.is_mining.load(Ordering::SeqCst),
             difficulty: self.target_difficulty.load(Ordering::SeqCst),
         }
     }
 
     /// Calculate block reward based on halving logic
-    fn calculate_reward(&self, total_blocks: u64) -> f64 {
+    fn calculate_reward(&self, total_blocks: u64) -> u128 {
         Self::calculate_reward_static(total_blocks)
     }
 
-    fn calculate_reward_static(total_blocks: u64) -> f64 {
+    fn calculate_reward_static(total_blocks: u64) -> u128 {
         let halvings = total_blocks / HALVING_INTERVAL;
         if halvings >= 64 {
-            return 0.0;
+            return 0;
         }
-        INITIAL_REWARD / (2.0f64.powi(halvings as i32))
+        INITIAL_REWARD >> (halvings as u32)
     }
 
     /// Check if hash meets difficulty target (leading zero bits)

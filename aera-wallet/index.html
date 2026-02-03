@@ -36,7 +36,7 @@
           <div class="wallet-address" id="address-text">Address not generated</div>
           <div class="actions">
             <button class="btn btn-primary btn-sm" id="btn-receive">Receive</button>
-            <button class="btn btn-primary btn-sm" id="btn-send-toggle">Send</button>
+            <button class="btn btn-success btn-sm" id="btn-send-toggle">Send</button>
           </div>
         </section>
 
@@ -52,7 +52,7 @@
             <input type="number" id="send-amount" placeholder="0.00" />
           </div>
           <div class="fee-hint" id="fee-hint">Network fee balance: —</div>
-          <button class="btn btn-glow" id="btn-send-execute">Confirm Transaction</button>
+          <button class="btn btn-success" id="btn-send-execute">Confirm Transaction</button>
           <button class="btn-link" id="btn-send-cancel">Cancel</button>
         </section>
 
@@ -257,7 +257,7 @@
             <div class="form-group">
               <input type="password" id="send-password-input" placeholder="Password" autocomplete="off" />
             </div>
-            <button class="btn btn-glow" id="btn-send-password-confirm">Sign & Send</button>
+            <button class="btn btn-success btn-compact" id="btn-send-password-confirm">Sign & Send</button>
             <button class="btn-link" id="btn-send-password-cancel">Cancel</button>
           </div>
         </div>
@@ -343,7 +343,7 @@
       <div id="import-panel" class="auth-panel glass-panel" style="display: none;">
         <h2>Import Wallet</h2>
         <p>Enter your 12-word recovery phrase.</p>
-        <textarea id="import-phrase" placeholder="word1 word2 ... word12" rows="4"></textarea>
+        <textarea id="import-phrase" placeholder="word1 word2 ... word12" rows="3"></textarea>
         <div class="form-group">
           <label>Keystore Password</label>
           <input type="password" id="import-pw" placeholder="Encryption Password" />

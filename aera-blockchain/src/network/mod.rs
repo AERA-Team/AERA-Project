@@ -42,10 +42,14 @@ pub const TOPIC_VOTES: &str = "/aera/votes/1.0.0";
 // Limits / Defaults
 // ============================================================================
 
+/// Max number of connected peers (DoS mitigation).
 const MAX_PEERS: usize = 128;
+/// Max blocks per sync request (limits response size).
 const MAX_BLOCKS_PER_REQUEST: u32 = 256;
+/// Rate limit for sync requests per peer per minute.
 const MAX_SYNC_REQUESTS_PER_MINUTE: u32 = 30;
-const DEFAULT_MAX_TRANSMIT_SIZE: usize = 2 * 1024 * 1024; // 2 MB
+/// Gossipsub max message size (2 MB).
+const DEFAULT_MAX_TRANSMIT_SIZE: usize = 2 * 1024 * 1024;
 
 // ============================================================================
 // Network Events (outbound to main loop)
@@ -130,11 +134,13 @@ pub enum SyncResponse {
     Error(String),
 }
 
-/// Wrapper for response channel to send in events
+/// Wrapper for response channel to send in events.
 #[derive(Debug)]
 pub struct SyncResponseChannel(pub ResponseChannel<SyncResponse>);
 
-// Implement Send + Sync for channel wrapper
+/// Used only to pass the channel to the single event-loop task that consumes it once; no concurrent access.
+// SAFETY: ResponseChannel is used in a single-consumer way (sent via mpsc to one task, responded to once).
+// We do not share the channel across threads; only Send is required for the message passing.
 unsafe impl Send for SyncResponseChannel {}
 unsafe impl Sync for SyncResponseChannel {}
 
@@ -318,9 +324,15 @@ impl NetworkService {
         let txs_topic = IdentTopic::new(TOPIC_TRANSACTIONS);
         let votes_topic = IdentTopic::new(TOPIC_VOTES);
 
-        swarm.behaviour_mut().gossipsub.subscribe(&blocks_topic).ok();
-        swarm.behaviour_mut().gossipsub.subscribe(&txs_topic).ok();
-        swarm.behaviour_mut().gossipsub.subscribe(&votes_topic).ok();
+        if let Err(e) = swarm.behaviour_mut().gossipsub.subscribe(&blocks_topic) {
+            warn!("Failed to subscribe to blocks topic: {:?}", e);
+        }
+        if let Err(e) = swarm.behaviour_mut().gossipsub.subscribe(&txs_topic) {
+            warn!("Failed to subscribe to txs topic: {:?}", e);
+        }
+        if let Err(e) = swarm.behaviour_mut().gossipsub.subscribe(&votes_topic) {
+            warn!("Failed to subscribe to votes topic: {:?}", e);
+        }
 
         // Start listening
         if let Err(e) = swarm.listen_on(listen_addr.clone()) {
@@ -354,7 +366,9 @@ impl NetworkService {
                 // Periodic Kademlia bootstrap
                 _ = bootstrap_interval.tick() => {
                     debug!("Running Kademlia bootstrap");
-                    let _ = swarm.behaviour_mut().kademlia.bootstrap();
+                    if let Err(e) = swarm.behaviour_mut().kademlia.bootstrap() {
+                        warn!("Kademlia bootstrap failed: {:?}", e);
+                    }
                 }
             }
         }
@@ -400,18 +414,26 @@ impl NetworkService {
                 swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
                 
                 // Notify main loop
-                let _ = event_tx.send(NetworkEvent::PeerConnected(peer_id)).await;
+                if event_tx.send(NetworkEvent::PeerConnected(peer_id)).await.is_err() {
+                    debug!("Event channel closed (shutdown)");
+                }
                 let peer_count = peers.read().await.len();
-                let _ = event_tx.send(NetworkEvent::PeerCountChanged(peer_count)).await;
+                if event_tx.send(NetworkEvent::PeerCountChanged(peer_count)).await.is_err() {
+                    debug!("Event channel closed (shutdown)");
+                }
             }
 
             // Connection closed
             SwarmEvent::ConnectionClosed { peer_id, .. } => {
                 info!("🔌 Disconnected from peer: {}", peer_id);
                 peers.write().await.remove(&peer_id);
-                let _ = event_tx.send(NetworkEvent::PeerDisconnected(peer_id)).await;
+                if event_tx.send(NetworkEvent::PeerDisconnected(peer_id)).await.is_err() {
+                    debug!("Event channel closed (shutdown)");
+                }
                 let peer_count = peers.read().await.len();
-                let _ = event_tx.send(NetworkEvent::PeerCountChanged(peer_count)).await;
+                if event_tx.send(NetworkEvent::PeerCountChanged(peer_count)).await.is_err() {
+                    debug!("Event channel closed (shutdown)");
+                }
             }
 
             // Gossipsub message received
@@ -432,7 +454,9 @@ impl NetworkService {
                     match bincode::deserialize::<Transaction>(&message.data) {
                         Ok(tx) => {
                             debug!("📨 Received transaction via gossip");
-                            let _ = event_tx.send(NetworkEvent::NewTransaction(tx)).await;
+                            if event_tx.send(NetworkEvent::NewTransaction(tx)).await.is_err() {
+                                debug!("Event channel closed (shutdown)");
+                            }
                         }
                         Err(e) => warn!("Failed to deserialize transaction: {}", e),
                     }
@@ -497,28 +521,36 @@ impl NetworkService {
                         match request {
                             SyncRequest::GetBlocks { from_height, count } => {
                                 let bounded_count = std::cmp::min(count, MAX_BLOCKS_PER_REQUEST);
-                                let _ = event_tx.send(NetworkEvent::BlocksRequested {
+                                if event_tx.send(NetworkEvent::BlocksRequested {
                                     peer,
                                     from_height,
                                     count: bounded_count,
                                     channel: SyncResponseChannel(channel),
-                                }).await;
+                                }).await.is_err() {
+                                    warn!("Event channel closed; cannot forward BlocksRequested");
+                                }
                             }
                             SyncRequest::GetBlockByHash(_hash) => {
-                                // Handle single block request
-                                let _ = event_tx.send(NetworkEvent::BlocksRequested {
+                                if event_tx.send(NetworkEvent::BlocksRequested {
                                     peer,
                                     from_height: 0,
                                     count: 1,
                                     channel: SyncResponseChannel(channel),
-                                }).await;
+                                }).await.is_err() {
+                                    warn!("Event channel closed; cannot forward BlocksRequested");
+                                }
                             }
                             SyncRequest::GetChainTip => {
-                                // Respond with current chain tip
-                                // (would need chain state access here)
+                                let response = SyncResponse::Error("Chain tip not implemented".to_string());
+                                if let Err(e) = swarm.behaviour_mut().sync.send_response(channel, response) {
+                                    warn!("Failed to send chain tip response: {:?}", e);
+                                }
                             }
                             SyncRequest::GetHeaders { from_height: _, count: _ } => {
-                                // Headers-only sync for light clients
+                                let response = SyncResponse::Error("Headers sync not implemented".to_string());
+                                if let Err(e) = swarm.behaviour_mut().sync.send_response(channel, response) {
+                                    warn!("Failed to send headers response: {:?}", e);
+                                }
                             }
                         }
                     }
@@ -530,16 +562,20 @@ impl NetworkService {
                         match response {
                             SyncResponse::Blocks(blocks) => {
                                 info!("Received {} blocks from {}", blocks.len(), peer);
-                                let _ = event_tx.send(NetworkEvent::BlocksReceived {
+                                if event_tx.send(NetworkEvent::BlocksReceived {
                                     from_peer: peer,
                                     blocks,
-                                }).await;
+                                }).await.is_err() {
+                                    debug!("Event channel closed (shutdown)");
+                                }
                             }
                             SyncResponse::Block(Some(block)) => {
-                                let _ = event_tx.send(NetworkEvent::BlocksReceived {
+                                if event_tx.send(NetworkEvent::BlocksReceived {
                                     from_peer: peer,
                                     blocks: vec![block],
-                                }).await;
+                                }).await.is_err() {
+                                    debug!("Event channel closed (shutdown)");
+                                }
                             }
                             SyncResponse::Error(err) => {
                                 warn!("Sync error from {}: {}", peer, err);
@@ -609,7 +645,9 @@ impl NetworkService {
             NetworkCommand::RespondBlocks { channel, blocks } => {
                 debug!("Responding with {} blocks", blocks.len());
                 let response = SyncResponse::Blocks(blocks);
-                let _ = swarm.behaviour_mut().sync.send_response(channel.0, response);
+                if let Err(e) = swarm.behaviour_mut().sync.send_response(channel.0, response) {
+                    warn!("Failed to send blocks response: {:?}", e);
+                }
             }
 
             NetworkCommand::Dial(addr) => {
@@ -621,7 +659,9 @@ impl NetworkService {
 
             NetworkCommand::GetPeerCount => {
                 let count = swarm.connected_peers().count();
-                let _ = event_tx.send(NetworkEvent::PeerCountChanged(count)).await;
+                if event_tx.send(NetworkEvent::PeerCountChanged(count)).await.is_err() {
+                    debug!("Event channel closed (shutdown)");
+                }
             }
         }
     }

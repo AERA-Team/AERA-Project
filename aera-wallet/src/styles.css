@@ -87,14 +87,14 @@ body {
   height: 700px;
   display: flex;
   flex-direction: column;
-  justify-content: flex-start;
-  /* Changed from center to prevent stretching */
+  justify-content: center;
   align-items: center;
   text-align: center;
   padding: 60px 40px;
   animation: panelSlideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
   transition: opacity 0.3s ease, transform 0.3s ease;
 }
+
 
 @keyframes panelSlideIn {
   from {
@@ -178,7 +178,7 @@ body {
   backdrop-filter: blur(15px) saturate(100%);
   -webkit-backdrop-filter: blur(15px) saturate(100%);
   border: 1px solid var(--line);
-  border-radius: 40px;
+  border-radius: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -202,7 +202,7 @@ body {
   content: '';
   position: absolute;
   inset: 12px;
-  border-radius: 28px;
+  border-radius: 0;
   border: 1px solid rgba(255, 255, 255, 0.04);
   z-index: 0;
   pointer-events: none;
@@ -516,14 +516,15 @@ header {
 
 #import-phrase {
   width: 100%;
+  max-width: 320px;
   background: rgba(0, 0, 0, 0.2);
   border: 1px solid var(--glass-border);
-  border-radius: 15px;
-  padding: 15px;
+  border-radius: 12px;
+  padding: 12px;
   color: white;
   font-family: monospace;
   font-size: 0.85rem;
-  margin-bottom: 20px;
+  margin: 0 auto 18px;
   resize: none;
 }
 
@@ -552,16 +553,24 @@ header {
   font-size: 0.9rem;
 }
 
+/* Back/secondary link-style buttons */
 .btn-link {
-  background: none;
-  border: none;
-  color: var(--text-dim);
+  background: rgba(50, 50, 50, 0.5);
+  border: 1mm solid rgba(255, 255, 255, 0.1);
+  color: #FFFFFF;
   font-size: 0.8rem;
+  font-weight: 500;
   cursor: pointer;
-  margin-top: 10px;
-  display: block;
+  margin-top: 8px;
+  height: 36px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
-  text-align: center;
+  max-width: 200px;
+  transition: all 0.3s;
+  backdrop-filter: blur(5px);
 }
 
 .actions {
@@ -1237,25 +1246,6 @@ footer {
   margin-bottom: 15px;
 }
 
-/* Redesign secondary buttons as interactive items */
-.btn-link {
-  background: rgba(50, 50, 50, 0.5);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: #FFFFFF;
-  font-size: 0.8rem;
-  font-weight: 500;
-  cursor: pointer;
-  margin-top: 10px;
-  height: 40px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  transition: all 0.3s;
-  backdrop-filter: blur(5px);
-}
-
 .btn-link:hover {
   background: rgba(70, 70, 70, 0.7);
   color: #FFFFFF;
@@ -1276,6 +1266,28 @@ footer {
   margin: 8px auto 0;
   padding: 0 18px;
   letter-spacing: 0.2px;
+}
+
+/* Glowing yellow titles for key screens */
+#login-panel h2,
+#import-panel h2,
+#settings-modal h2,
+#receive-modal h2 {
+  color: var(--accent);
+  text-shadow: var(--gold-glow);
+}
+
+/* Green primary send buttons */
+.btn-success {
+  background: rgba(0, 200, 120, 0.18);
+  color: #eafff5;
+  border: 1px solid #00c97f;
+}
+
+.btn-success:hover {
+  background: #00c97f;
+  color: #001b10;
+  box-shadow: 0 0 20px rgba(0, 201, 127, 0.5);
 }
 
 .small-label {

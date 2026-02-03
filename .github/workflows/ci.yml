@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: |
+            aera-wallet/package-lock.json
+
+      - name: Backend - cargo check
+        working-directory: ./aera-blockchain
+        run: cargo check
+
+      - name: Backend - cargo test (lib only)
+        working-directory: ./aera-blockchain
+        run: cargo test --lib
+
+      - name: Miner - cargo test
+        working-directory: ./aera-miner
+        run: cargo test
+
+      - name: Frontend - install deps
+        working-directory: ./aera-wallet
+        run: npm install
+
+      - name: Frontend - typecheck
+        working-directory: ./aera-wallet
+        run: npm run lint
+
+      - name: Frontend - unit tests
+        working-directory: ./aera-wallet
+        run: npm run test
+

@@ -63,6 +63,7 @@ impl Deposit {
 pub struct BridgeConfig {
     pub infura_api_key: String,
     pub eth_rpc_url: String,
+    pub eth_usdt_contract: String,
     pub tron_api_url: String,
     pub tron_api_key: String,
     pub eth_vault_address: String,
@@ -76,6 +77,7 @@ impl Default for BridgeConfig {
         Self {
             infura_api_key: "".to_string(),
             eth_rpc_url: "".to_string(),
+            eth_usdt_contract: "0xdAC17F958D2ee523a2206206994597C13D831ec7".to_string(),
             tron_api_url: "https://api.trongrid.io".to_string(),
             tron_api_key: "".to_string(),
             eth_vault_address: "".to_string(),

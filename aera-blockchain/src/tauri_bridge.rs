@@ -102,6 +102,9 @@ pub async fn init_node(
                     if let Some(key) = bridge.get("INFURA_API_KEY").and_then(|k| k.as_str()) {
                          if !key.is_empty() { config.bridge_config.infura_api_key = key.to_string(); }
                     }
+                    if let Some(c) = bridge.get("ETH_USDT_CONTRACT").and_then(|c| c.as_str()) {
+                        if !c.is_empty() { config.bridge_config.eth_usdt_contract = c.to_string(); }
+                    }
                     if let Some(url) = bridge.get("TRON_API_URL").and_then(|u| u.as_str()) {
                         if !url.is_empty() { config.bridge_config.tron_api_url = url.to_string(); }
                     }
@@ -162,8 +165,7 @@ pub async fn create_mnemonic_wallet(
     let mut vault = manager.key_vault().write().await;
     let (address, mnemonic) = vault.create_mnemonic_wallet(&password).map_err(|e| e.to_string())?;
     
-    // Step 2: Ensure disk sync and force manager refresh
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // Step 2: Force manager refresh after write
     vault.reload_from_disk().map_err(|e| e.to_string())?;
 
     Ok(WalletInfo {
@@ -191,8 +193,7 @@ pub async fn import_mnemonic_wallet(
     let mut vault = manager.key_vault().write().await;
     let address = vault.import_mnemonic_wallet(&phrase, &password).map_err(|e| e.to_string())?;
     
-    // Step 2: Ensure disk sync and force manager refresh
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // Step 2: Force manager refresh after write
     vault.reload_from_disk().map_err(|e| e.to_string())?;
 
     Ok(WalletInfo {
@@ -302,7 +303,9 @@ pub async fn lock_session(state: State<'_, TauriState>) -> Result<bool, String> 
     vault.lock_session(); // Clear session and sensitive data
 
     // Also trigger a refresh to make sure we see any manual file changes on the login screen
-    let _ = vault.reload_from_disk();
+    if let Err(e) = vault.reload_from_disk() {
+        tracing::warn!("Keystore reload after lock failed: {}", e);
+    }
 
     Ok(true)
 }

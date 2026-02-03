@@ -22,12 +22,12 @@ use sha2::{Digest, Sha256};
 use tracing::{info, warn};
 use std::str::FromStr;
 use std::collections::HashMap;
-use std::fs::OpenOptions;
 use std::io::Write;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use std::sync::OnceLock;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 // ============================================================================
 // Error Types
@@ -256,13 +256,13 @@ pub struct WalletSession {
     pub aera_address: String,
 
     /// Session encryption key
-    pub session_key: Vec<u8>,
+    pub session_key: Zeroizing<Vec<u8>>,
 
     /// Active mnemonic for dynamic address derivation
-    pub mnemonic: Vec<u8>,
+    pub mnemonic: Zeroizing<Vec<u8>>,
 
     /// Derived seed from mnemonic + password
-    pub mnemonic_seed: Vec<u8>,
+    pub mnemonic_seed: Zeroizing<Vec<u8>>,
 
     /// Session expiration time
     #[zeroize(skip)]
@@ -354,18 +354,11 @@ impl KeyVault {
         let data = serde_json::to_vec_pretty(&keystore)
             .map_err(|e| KeystoreError::Serialization(e.to_string()))?;
 
-        // 2. Atomic-ish save for primary file
+        // 2. Atomic save for primary file
         {
             let primary_path = self.dir.join("keystore.json");
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(&primary_path)?;
-            file.write_all(&data)?;
-            file.sync_all()?;
+            atomic_write(&primary_path, &data)?;
             set_strict_permissions(&primary_path)?;
-            // Handle dropped here
         }
 
         // 3. Save individual files for each AERA address
@@ -381,17 +374,8 @@ impl KeyVault {
                 let json = serde_json::to_vec_pretty(&individual_data)
                     .map_err(|e| KeystoreError::Serialization(e.to_string()))?;
                 
-                {
-                    let mut f = OpenOptions::new()
-                        .write(true)
-                        .create(true)
-                        .truncate(true)
-                        .open(&individual_file)?;
-                    f.write_all(&json)?;
-                    f.sync_all()?;
-                    set_strict_permissions(&individual_file)?;
-                    // Handle dropped here
-                }
+                atomic_write(&individual_file, &json)?;
+                set_strict_permissions(&individual_file)?;
             }
         }
 
@@ -467,34 +451,6 @@ impl KeyVault {
         Ok((ciphertext, nonce_bytes.to_vec(), salt.to_vec()))
     }
 
-    /// Encrypt private key with AES-256-GCM (Standard PBE)
-    #[allow(dead_code)]
-    fn encrypt_key(
-        &self,
-        private_key: &[u8],
-        password: &str,
-    ) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), KeystoreError> {
-        // Generate random salt and nonce
-        let mut salt = [0u8; 32];
-        let mut nonce_bytes = [0u8; 12];
-        OsRng.fill_bytes(&mut salt);
-        OsRng.fill_bytes(&mut nonce_bytes);
-
-        // Derive encryption key
-        let encryption_key = Self::derive_key(password, &salt, &self.kdf_params)?;
-
-        // Encrypt with AES-256-GCM
-        let cipher = Aes256Gcm::new_from_slice(&encryption_key)
-            .map_err(|e| KeystoreError::Encryption(e.to_string()))?;
-
-        let nonce = Nonce::from_slice(&nonce_bytes);
-        let ciphertext = cipher
-            .encrypt(nonce, private_key)
-            .map_err(|e| KeystoreError::Encryption(e.to_string()))?;
-
-        Ok((ciphertext, nonce_bytes.to_vec(), salt.to_vec()))
-    }
-
     /// Decrypt private key (Hybrid: Master Key + Password)
     fn decrypt_key_hybrid(
         &self,
@@ -507,23 +463,38 @@ impl KeyVault {
         // 2. Get Master Key from System
         let master_key = SystemStore::get_or_create_master_key()?;
 
-        // 3. Combine keys (HKDF)
+        // 3. Combine keys (HKDF, preferred)
         let hk = hkdf::Hkdf::<sha2::Sha256>::new(Some(&master_key), &derived_password_key);
         let mut decryption_key = [0u8; 32];
         hk.expand(b"aera-wallet-key", &mut decryption_key)
             .map_err(|_| KeystoreError::Decryption("HKDF expand failed".to_string()))?;
 
-        // 4. Decrypt with AES-256-GCM
-        let cipher = Aes256Gcm::new_from_slice(&decryption_key)
-            .map_err(|e| KeystoreError::Decryption(e.to_string()))?;
+        if let Ok(cipher) = Aes256Gcm::new_from_slice(&decryption_key) {
+            let nonce = Nonce::from_slice(&encrypted.nonce);
+            if let Ok(bytes) = cipher.decrypt(nonce, encrypted.ciphertext.as_slice()) {
+                return Ok(DecryptedKey {
+                    bytes,
+                    algorithm: encrypted.algorithm,
+                });
+            }
+        }
 
+        // 4. Legacy XOR fallback (for older wallets)
+        let mut legacy_key = [0u8; 32];
+        for i in 0..32 {
+            legacy_key[i] = derived_password_key[i] ^ master_key[i];
+        }
+        let cipher = Aes256Gcm::new_from_slice(&legacy_key)
+            .map_err(|e| KeystoreError::Decryption(e.to_string()))?;
         let nonce = Nonce::from_slice(&encrypted.nonce);
         let bytes = cipher
             .decrypt(nonce, encrypted.ciphertext.as_slice())
             .map_err(|e| KeystoreError::Decryption(e.to_string()))?;
 
-        let algorithm = encrypted.algorithm;
-        Ok(DecryptedKey { bytes, algorithm })
+        Ok(DecryptedKey {
+            bytes,
+            algorithm: encrypted.algorithm,
+        })
     }
 
     /// Decrypt private key with AES-256-GCM using password (Standard PBE)
@@ -611,9 +582,9 @@ impl KeyVault {
         // 5. Store Session
         self.active_session = Some(WalletSession {
             aera_address: entry.id.clone(),
-            session_key: session_key.to_vec(),
-            mnemonic: mnemonic_bytes,
-            mnemonic_seed,
+            session_key: Zeroizing::new(session_key.to_vec()),
+            mnemonic: Zeroizing::new(mnemonic_bytes),
+            mnemonic_seed: Zeroizing::new(mnemonic_seed),
             expires_at: std::time::SystemTime::now()
                 .checked_add(std::time::Duration::from_secs(SESSION_TTL_SECS))
                 .ok_or_else(|| KeystoreError::Encryption("Session expiry overflow".to_string()))?,
@@ -686,7 +657,7 @@ impl KeyVault {
             nonce: aera_nonce,
             salt: aera_salt,
             kdf_params: self.kdf_params.clone(),
-            created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+            created_at: unix_timestamp(),
         };
         
         self.keys.insert(address.to_lowercase(), encrypted);
@@ -733,7 +704,7 @@ impl KeyVault {
             nonce: aera_nonce,
             salt: aera_salt,
             kdf_params: self.kdf_params.clone(),
-            created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+            created_at: unix_timestamp(),
         };
         
         self.keys.insert(address.to_lowercase(), encrypted);
@@ -783,18 +754,6 @@ impl KeyVault {
     // ========================================================================
 
 
-    #[allow(dead_code)]
-    fn derive_secp256k1_private_key_from_mnemonic(
-        phrase: &str,
-        password: &str,
-        path: &str,
-    ) -> Result<[u8; 32], KeystoreError> {
-        let mnemonic = Bip39Mnemonic::parse(phrase)
-            .map_err(|e| KeystoreError::Encryption(e.to_string()))?;
-        let seed = mnemonic.to_seed(password);
-        Self::derive_secp256k1_private_key_from_seed(&seed, path)
-    }
-
     fn derive_secp256k1_private_key_from_seed(
         seed: &[u8],
         path: &str,
@@ -806,38 +765,12 @@ impl KeyVault {
         Ok(child.private_key().to_bytes().into())
     }
 
-    #[allow(dead_code)]
-    fn derive_eth_address_from_mnemonic(
-        phrase: &str,
-        password: &str,
-    ) -> Result<String, KeystoreError> {
-        let priv_key = Self::derive_secp256k1_private_key_from_mnemonic(
-            phrase,
-            password,
-            "m/44'/60'/0'/0/0",
-        )?;
-        Self::secp256k1_to_eth_address(&priv_key)
-    }
-
     fn derive_eth_address_from_seed(seed: &[u8]) -> Result<String, KeystoreError> {
         let priv_key = Self::derive_secp256k1_private_key_from_seed(
             seed,
             "m/44'/60'/0'/0/0",
         )?;
         Self::secp256k1_to_eth_address(&priv_key)
-    }
-
-    #[allow(dead_code)]
-    fn derive_tron_address_from_mnemonic(
-        phrase: &str,
-        password: &str,
-    ) -> Result<String, KeystoreError> {
-        let priv_key = Self::derive_secp256k1_private_key_from_mnemonic(
-            phrase,
-            password,
-            "m/44'/195'/0'/0/0",
-        )?;
-        Self::secp256k1_to_tron_address(&priv_key)
     }
 
     fn derive_tron_address_from_seed(seed: &[u8]) -> Result<String, KeystoreError> {
@@ -870,10 +803,7 @@ impl KeyVault {
             nonce,
             salt,
             kdf_params: self.kdf_params.clone(),
-            created_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+            created_at: unix_timestamp(),
         };
 
         self.keys.insert(address.to_lowercase(), encrypted);
@@ -899,10 +829,7 @@ impl KeyVault {
             nonce,
             salt,
             kdf_params: self.kdf_params.clone(),
-            created_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+            created_at: unix_timestamp(),
         };
 
         self.keys.insert(address.to_lowercase(), encrypted);
@@ -928,10 +855,7 @@ impl KeyVault {
             nonce,
             salt,
             kdf_params: self.kdf_params.clone(),
-            created_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+            created_at: unix_timestamp(),
         };
 
         self.keys.insert(address.to_lowercase(), encrypted);
@@ -1202,6 +1126,37 @@ fn set_strict_permissions(path: &Path) -> Result<(), KeystoreError> {
         let _ = path;
     }
     Ok(())
+}
+
+fn unix_timestamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn atomic_write(path: &Path, data: &[u8]) -> Result<(), KeystoreError> {
+    use std::io::ErrorKind as IoKind;
+    let parent = path.parent().ok_or_else(|| {
+        KeystoreError::Io(std::io::Error::new(IoKind::InvalidInput, "Invalid keystore path"))
+    })?;
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|e| KeystoreError::Io(std::io::Error::new(IoKind::Other, e)))?;
+    tmp.write_all(data)?;
+    tmp.as_file().sync_all()?;
+
+    match tmp.persist(path) {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            let tempfile::PersistError { file: tmp, error: io_err } = err;
+            if io_err.kind() == ErrorKind::AlreadyExists {
+                let _ = std::fs::remove_file(path);
+                tmp.persist(path).map(|_| ()).map_err(|e| KeystoreError::Io(e.error))
+            } else {
+                Err(KeystoreError::Io(io_err))
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -125,6 +125,9 @@ async fn main() -> Result<()> {
                         if let Some(url) = non_empty("ETH_RPC_URL") {
                             config.bridge_config.eth_rpc_url = url;
                         }
+                        if let Some(c) = non_empty("ETH_USDT_CONTRACT") {
+                            config.bridge_config.eth_usdt_contract = c;
+                        }
                         if let Some(url) = non_empty("TRON_API_URL") {
                             if !url.starts_with("http://") && !url.starts_with("https://") {
                                 warn!("config.toml bridge.TRON_API_URL does not look like a URL");

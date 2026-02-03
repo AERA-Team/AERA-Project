@@ -42,6 +42,7 @@ bip39 = { version = "^2.0", features = ["rand"] }
 
 # Storage
 sled = "^0.34"
+tempfile = "3.10"
 
 # Logging
 tracing = "^0.1"

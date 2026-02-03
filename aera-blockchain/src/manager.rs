@@ -10,6 +10,7 @@ use crate::bridge::{BridgeEvent, BridgeConfig, DepositStore, TronClient};
 use crate::mining::MiningManager;
 use crate::network::{NetworkEvent, NetworkService};
 use crate::state::StateDB;
+use crate::state::genesis::{DECIMALS, MINING_REWARDS_ADDRESS_BYTES};
 use crate::wallet::keystore::{KeyVault, KeyPurpose};
 use crate::state::{TransactionRecord, TransactionStatus};
 use crate::types::{Address, Amount};
@@ -95,6 +96,7 @@ pub struct AeraManager {
 }
 
 impl AeraManager {
+    const AERA_FEE_DIVISOR: Amount = 100_000;
     pub async fn new(config: ManagerConfig) -> Result<Self> {
         info!("🚀 Initializing AERA Manager...");
 
@@ -239,11 +241,10 @@ impl AeraManager {
         }
     }
 
-    /// Credit mining reward to wallet; deduct from MINING_REWARDS pool (no inflation).
-    pub async fn credit_mining_reward(&self, address_str: String, reward_aera: f64) {
-        let decimals = 10u128.pow(18);
-        let reward_amount = (reward_aera * decimals as f64) as u128;
-        let pool_addr: crate::types::Address = [0u8; 32]; // MINING_REWARDS_ADDRESS
+    /// Credit mining reward to wallet; deduct from genesis MINING_REWARDS pool (fixed address, no inflation).
+    pub async fn credit_mining_reward(&self, address_str: String, reward_base: u128) {
+        let reward_amount = reward_base;
+        let reward_aera = reward_base as f64 / 10u128.pow(DECIMALS) as f64;
 
         let miner_bytes = match {
             let n = address_str.to_lowercase();
@@ -261,7 +262,7 @@ impl AeraManager {
             }
         };
 
-        let pool_balance = match self.state.get_balance(&pool_addr) {
+        let pool_balance = match self.state.get_balance(&MINING_REWARDS_ADDRESS_BYTES) {
             Ok(b) => b,
             Err(e) => {
                 error!("Failed to get mining pool balance: {}", e);
@@ -276,14 +277,16 @@ impl AeraManager {
             return;
         }
 
-        if let Err(e) = self.state.set_balance(&pool_addr, pool_balance - reward_amount) {
+        if let Err(e) = self.state.set_balance(&MINING_REWARDS_ADDRESS_BYTES, pool_balance - reward_amount) {
             error!("Failed to deduct from mining pool: {}", e);
             return;
         }
         let miner_balance = self.state.get_balance(&miner_bytes).unwrap_or(0);
         if let Err(e) = self.state.set_balance(&miner_bytes, miner_balance + reward_amount) {
             error!("Failed to credit mining reward: {}", e);
-            let _ = self.state.set_balance(&pool_addr, pool_balance);
+            if let Err(err) = self.state.set_balance(&MINING_REWARDS_ADDRESS_BYTES, pool_balance) {
+                warn!("Failed to restore mining pool balance: {}", err);
+            }
             return;
         }
         if let Err(e) = self.state.flush() {
@@ -331,7 +334,7 @@ impl AeraManager {
             amount: amount,
             timestamp: Self::unix_timestamp(),
             chain: "Aera (Local)".to_string(),
-            status: TransactionStatus::Confirmed,
+            status: TransactionStatus::Pending,
         };
         self.state.put_transaction(&record)?;
         self.state.flush()?;
@@ -397,7 +400,7 @@ impl AeraManager {
         match transfer.target_chain {
             TargetChain::Aera => {
                 // 2. Check Balance & Fees (0.001%)
-                let fee = transfer.amount / 100_000;
+                let fee = transfer.amount / Self::AERA_FEE_DIVISOR;
                 let total_needed = transfer.amount + fee;
 
                 let from_bytes = self.address_to_bytes(&transfer.from_key.to_lowercase())
@@ -431,9 +434,11 @@ impl AeraManager {
                     amount: transfer.amount,
                     timestamp: Self::unix_timestamp(),
                     chain: "Aera".to_string(),
-                    status: TransactionStatus::Confirmed,
+                    status: TransactionStatus::Pending,
                 };
-                let _ = self.state.put_transaction(&record);
+                if let Err(e) = self.state.put_transaction(&record) {
+                    warn!("Failed to store transaction record: {}", e);
+                }
                 Ok(tx_hash)
             }
             TargetChain::Ethereum => {
@@ -449,9 +454,11 @@ impl AeraManager {
                     amount: transfer.amount,
                     timestamp: Self::unix_timestamp(),
                     chain: "Ethereum".to_string(),
-                    status: TransactionStatus::Confirmed,
+                    status: TransactionStatus::Pending,
                 };
-                let _ = self.state.put_transaction(&record);
+                if let Err(e) = self.state.put_transaction(&record) {
+                    warn!("Failed to store transaction record: {}", e);
+                }
                 Ok(tx_hash)
             }
             TargetChain::EthereumUsdt => {
@@ -472,9 +479,11 @@ impl AeraManager {
                     amount: transfer.amount,
                     timestamp: Self::unix_timestamp(),
                     chain: "EthereumUSDT".to_string(),
-                    status: TransactionStatus::Confirmed,
+                    status: TransactionStatus::Pending,
                 };
-                let _ = self.state.put_transaction(&record);
+                if let Err(e) = self.state.put_transaction(&record) {
+                    warn!("Failed to store transaction record: {}", e);
+                }
                 Ok(tx_hash)
             }
             TargetChain::Tron => {
@@ -500,9 +509,11 @@ impl AeraManager {
                     amount: transfer.amount,
                     timestamp: Self::unix_timestamp(),
                     chain: "TronUSDT".to_string(),
-                    status: TransactionStatus::Confirmed,
+                    status: TransactionStatus::Pending,
                 };
-                let _ = self.state.put_transaction(&record);
+                if let Err(e) = self.state.put_transaction(&record) {
+                    warn!("Failed to store transaction record: {}", e);
+                }
                 Ok(tx_hash)
             }
             TargetChain::TronNative => {
@@ -527,9 +538,11 @@ impl AeraManager {
                     amount: transfer.amount,
                     timestamp: Self::unix_timestamp(),
                     chain: "Tron".to_string(),
-                    status: TransactionStatus::Confirmed,
+                    status: TransactionStatus::Pending,
                 };
-                let _ = self.state.put_transaction(&record);
+                if let Err(e) = self.state.put_transaction(&record) {
+                    warn!("Failed to store transaction record: {}", e);
+                }
                 Ok(tx_hash)
             }
         }
@@ -661,7 +674,10 @@ impl AeraManager {
         use ethers::types::{Address as EthAddress, U256};
         use std::str::FromStr;
 
-        const USDT_CONTRACT: &str = "0xdAC17F958D2ee523a2206206994597C13D831ec7";
+        let contract_addr = self.config.bridge_config.eth_usdt_contract.trim();
+        if contract_addr.is_empty() {
+            return Err(anyhow::anyhow!("ETH USDT contract is not configured"));
+        }
         let rpc_url = self.eth_rpc_url()?;
 
         let addr = EthAddress::from_str(address)
@@ -672,7 +688,7 @@ impl AeraManager {
             &[Token::Address(addr)],
         );
 
-        let raw = crate::bridge::eth_listener::eth_call(&rpc_url, USDT_CONTRACT, data)
+        let raw = crate::bridge::eth_listener::eth_call(&rpc_url, contract_addr, data)
             .await
             .map_err(|e| anyhow::anyhow!("ETH USDT call failed: {}", e))?;
 
@@ -699,7 +715,10 @@ impl AeraManager {
         use ethers::types::{Address as EthAddress, TransactionRequest, U256};
         use std::str::FromStr;
 
-        const USDT_CONTRACT: &str = "0xdAC17F958D2ee523a2206206994597C13D831ec7";
+        let contract_addr = self.config.bridge_config.eth_usdt_contract.trim();
+        if contract_addr.is_empty() {
+            return Err(anyhow::anyhow!("ETH USDT contract is not configured"));
+        }
         let rpc_url = self.eth_rpc_url()?;
 
         let provider = Provider::<Http>::try_from(rpc_url)
@@ -713,7 +732,7 @@ impl AeraManager {
         let client = SignerMiddleware::new(provider, wallet);
         let to = EthAddress::from_str(to_address)
             .map_err(|e| anyhow::anyhow!("Invalid Ethereum address: {}", e))?;
-        let contract = EthAddress::from_str(USDT_CONTRACT)
+        let contract = EthAddress::from_str(contract_addr)
             .map_err(|e| anyhow::anyhow!("Invalid USDT contract: {}", e))?;
 
         let data = crate::bridge::eth_listener::encode_function_call(

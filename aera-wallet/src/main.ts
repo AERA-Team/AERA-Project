@@ -1,9 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import QRCode from 'qrcode';
+import QRCode from "qrcode";
+import { encodeAmount } from "./utils";
+
+function requireElement<T extends HTMLElement>(id: string): T {
+    const el = document.getElementById(id);
+    if (!el) {
+        throw new Error(`Missing required element: ${id}`);
+    }
+    return el as T;
+}
 
 // DOM Elements - Auth Panels
-const authContainer = document.getElementById("auth-container")!;
+const authContainer = requireElement<HTMLElement>("auth-container");
 const panels = ["init-panel", "login-panel", "selection-panel", "create-pw-panel", "backup-panel", "import-panel"];
 
 // Initialize default data directory from backend
@@ -18,40 +27,40 @@ window.addEventListener("DOMContentLoaded", async () => {
 });
 
 // Dashboard Elements
-const dashboard = document.getElementById("main-dashboard")!;
-const balanceEl = document.getElementById("balance-amount")!;
-const addressEl = document.getElementById("address-text")!;
-const blockHeightEl = document.getElementById("block-height")!;
-const peerCountEl = document.getElementById("peer-count")!;
-const assetAeraVal = document.getElementById("asset-aera-val")!;
-const activityList = document.getElementById("activity-list")!;
+const dashboard = requireElement<HTMLElement>("main-dashboard");
+const balanceEl = requireElement<HTMLElement>("balance-amount");
+const addressEl = requireElement<HTMLElement>("address-text");
+const blockHeightEl = requireElement<HTMLElement>("block-height");
+const peerCountEl = requireElement<HTMLElement>("peer-count");
+const assetAeraVal = requireElement<HTMLElement>("asset-aera-val");
+const activityList = requireElement<HTMLElement>("activity-list");
 
 // Form Elements
-const dataDirInput = document.getElementById("data-dir") as HTMLInputElement;
-const createPwInput = document.getElementById("create-pw") as HTMLInputElement;
-const importPhraseInput = document.getElementById("import-phrase") as HTMLTextAreaElement;
-const importPwInput = document.getElementById("import-pw") as HTMLInputElement;
-const loginPwInput = document.getElementById("login-pw") as HTMLInputElement;
-const mnemonicDisplay = document.getElementById("mnemonic-display")!;
+const dataDirInput = requireElement<HTMLInputElement>("data-dir");
+const createPwInput = requireElement<HTMLInputElement>("create-pw");
+const importPhraseInput = requireElement<HTMLTextAreaElement>("import-phrase");
+const importPwInput = requireElement<HTMLInputElement>("import-pw");
+const loginPwInput = requireElement<HTMLInputElement>("login-pw");
+const mnemonicDisplay = requireElement<HTMLElement>("mnemonic-display");
 
 // Buttons
-const btnInit = document.getElementById("btn-init")!;
-const btnGoCreate = document.getElementById("btn-go-create")!;
-const btnGoImport = document.getElementById("btn-go-import")!;
-const btnDoCreate = document.getElementById("btn-do-create")!;
-const btnDoImport = document.getElementById("btn-do-import")!;
-const btnBackupConfirm = document.getElementById("btn-backup-confirm")!;
-const btnDoLogin = document.getElementById("btn-do-login")!;
-const btnSettings = document.getElementById("btn-settings")!;
-const btnLogout = document.getElementById("btn-logout")!;
-const btnCloseSettings = document.getElementById("btn-close-settings")!;
-const settingsModal = document.getElementById("settings-modal")!;
-const btnSwitchWallet = document.getElementById("btn-switch-wallet")!;
-const loginAddressInput = document.getElementById("login-address-input") as HTMLInputElement;
-const sendPasswordModal = document.getElementById("send-password-modal")!;
-const sendPasswordInput = document.getElementById("send-password-input") as HTMLInputElement;
-const btnSendPasswordConfirm = document.getElementById("btn-send-password-confirm")!;
-const btnSendPasswordCancel = document.getElementById("btn-send-password-cancel")!;
+const btnInit = requireElement<HTMLElement>("btn-init");
+const btnGoCreate = requireElement<HTMLElement>("btn-go-create");
+const btnGoImport = requireElement<HTMLElement>("btn-go-import");
+const btnDoCreate = requireElement<HTMLElement>("btn-do-create");
+const btnDoImport = requireElement<HTMLElement>("btn-do-import");
+const btnBackupConfirm = requireElement<HTMLElement>("btn-backup-confirm");
+const btnDoLogin = requireElement<HTMLElement>("btn-do-login");
+const btnSettings = requireElement<HTMLElement>("btn-settings");
+const btnLogout = requireElement<HTMLElement>("btn-logout");
+const btnCloseSettings = requireElement<HTMLElement>("btn-close-settings");
+const settingsModal = requireElement<HTMLElement>("settings-modal");
+const btnSwitchWallet = requireElement<HTMLElement>("btn-switch-wallet");
+const loginAddressInput = requireElement<HTMLInputElement>("login-address-input");
+const sendPasswordModal = requireElement<HTMLElement>("send-password-modal");
+const sendPasswordInput = requireElement<HTMLInputElement>("send-password-input");
+const btnSendPasswordConfirm = requireElement<HTMLElement>("btn-send-password-confirm");
+const btnSendPasswordCancel = requireElement<HTMLElement>("btn-send-password-cancel");
 
 // Global State
 let currentAddress = "";
@@ -60,12 +69,8 @@ let statsInterval: number | null = null;
 let activityInterval: number | null = null;
 let dashboardListenersAttached = false;
 let pendingSend: { to: string; amount: number; network: string; source: "main" | "bridge" } | null = null;
-const IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
-
-/** Decimals per chain for amount encoding (base units) */
-const CHAIN_DECIMALS: { [k: string]: number } = {
-    aera: 18, aera_usdt: 18, eth: 18, bridge_eth: 6, tron: 6, tron_native: 6
-};
+/** Idle lock timeout: lock wallet after this many ms without activity */
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 
 // Multi-Network State
 let currentNetwork = "aera";
@@ -118,6 +123,29 @@ const lastFeeBalances: { [key: string]: string } = {
     eth: "0.00 ETH",
     tron: "0.00 TRX"
 };
+let lastFeeFetchAt = 0;
+const FEE_REFRESH_MS = 30_000;
+
+// Helper: Fetch balance for a network and update DOM element
+async function fetchAndUpdateBalance(
+    invokeCmd: string,
+    address: string,
+    elementId: string,
+    cacheKey: string,
+    cache: { [key: string]: string }
+): Promise<string | null> {
+    if (!address || address === "Address not generated") return null;
+    try {
+        const bal: string = await invoke(invokeCmd, { address });
+        cache[cacheKey] = bal;
+        const el = document.getElementById(elementId);
+        if (el) el.textContent = bal;
+        return bal;
+    } catch (e) {
+        console.error(`${invokeCmd} failed`, e);
+        return null;
+    }
+}
 
 // Helper: Navigation
 function showPanel(id: string) {
@@ -144,8 +172,82 @@ function clearInputs() {
 // Helper: Clear mnemonic from DOM (no recovery phrase left in memory)
 function clearMnemonicDisplay() {
     if (mnemonicDisplay) {
-        mnemonicDisplay.innerHTML = "";
+        mnemonicDisplay.textContent = "";
     }
+}
+
+function renderMnemonic(words: string[]) {
+    if (!mnemonicDisplay) return;
+    mnemonicDisplay.textContent = "";
+    const fragment = document.createDocumentFragment();
+    words.forEach((word, i) => {
+        const item = document.createElement("div");
+        item.className = "mnemonic-word";
+        const idx = document.createElement("span");
+        idx.className = "mnemonic-index";
+        idx.textContent = `${i + 1}.`;
+        item.appendChild(idx);
+        item.appendChild(document.createTextNode(` ${word}`));
+        fragment.appendChild(item);
+    });
+    mnemonicDisplay.appendChild(fragment);
+}
+
+function renderActivityMessage(message: string) {
+    activityList.textContent = "";
+    const div = document.createElement("div");
+    div.style.textAlign = "center";
+    div.style.padding = "20px";
+    div.style.opacity = "0.5";
+    div.textContent = message;
+    activityList.appendChild(div);
+}
+
+function renderActivities(activities: any[], addrLower: string) {
+    activityList.textContent = "";
+    const fragment = document.createDocumentFragment();
+    activities.forEach(tx => {
+        const isSent = (tx.from || "").toLowerCase() === addrLower;
+        const date = new Date(tx.timestamp * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+
+        const amountBase = BigInt(tx.amount);
+        const decimals = BigInt(10) ** BigInt(18);
+        const whole = amountBase / decimals;
+        const frac = amountBase % decimals;
+        const fracStr = frac.toString().padStart(18, "0").substring(0, 4);
+        const amountFormatted = `${whole}.${fracStr}`;
+
+        const item = document.createElement("div");
+        item.className = "activity-item";
+
+        const left = document.createElement("div");
+        left.className = "activity-left";
+        const type = document.createElement("div");
+        type.className = "activity-type";
+        type.textContent = `${isSent ? "Sent" : "Received"} ${tx.chain}`;
+        const dateEl = document.createElement("div");
+        dateEl.className = "activity-date";
+        dateEl.textContent = date;
+        left.appendChild(type);
+        left.appendChild(dateEl);
+
+        const right = document.createElement("div");
+        right.className = "activity-right";
+        const amount = document.createElement("div");
+        amount.className = `activity-amount ${isSent ? "sent" : "received"}`;
+        amount.textContent = `${isSent ? "-" : "+"}${amountFormatted} ${tx.chain}`;
+        const status = document.createElement("div");
+        const statusText = (tx.status || "").toString();
+        status.className = `activity-status status-${statusText.toLowerCase()}`;
+        status.textContent = statusText;
+        right.appendChild(amount);
+        right.appendChild(status);
+
+        item.appendChild(left);
+        item.appendChild(right);
+        fragment.appendChild(item);
+    });
+    activityList.appendChild(fragment);
 }
 
 async function lockWallet() {
@@ -164,7 +266,7 @@ async function lockWallet() {
     // Reset dashboard visuals to blank state
     balanceEl.textContent = "0.00 AERA";
     addressEl.textContent = "aera1...";
-    activityList.innerHTML = '<div class="loading-spinner" style="text-align: center; padding: 20px; opacity: 0.5;">No activity found</div>';
+    renderActivityMessage("No activity found");
     setActiveTab("assets");
 
     clearInputs();
@@ -194,7 +296,14 @@ async function loadAvailableWallets() {
         const addresses: string[] = await invoke("refresh_wallets");
         const datalist = document.getElementById("available-addresses");
         if (datalist) {
-            datalist.innerHTML = addresses.map(addr => `<option value="${addr}">`).join("");
+            datalist.textContent = "";
+            const fragment = document.createDocumentFragment();
+            addresses.forEach(addr => {
+                const option = document.createElement("option");
+                option.value = addr;
+                fragment.appendChild(option);
+            });
+            datalist.appendChild(fragment);
             console.log(`Loaded ${addresses.length} addresses into datalist.`);
         }
     } catch (e) {
@@ -240,7 +349,7 @@ function clearSessionIntervals() {
 
 function startIdleTimer() {
     stopIdleTimer();
-    idleTimer = window.setTimeout(lockWallet, IDLE_TIMEOUT);
+    idleTimer = window.setTimeout(lockWallet, IDLE_TIMEOUT_MS);
 }
 
 function stopIdleTimer() {
@@ -287,10 +396,6 @@ function getAddressForNetwork(net: string): string {
 }
 
 async function switchNetwork(net: string) {
-    if (net === "aera_usdt") {
-        alert("AERA USDT is temporarily unavailable.");
-        return;
-    }
     currentNetwork = net;
 
     // Update Send Indicator
@@ -418,11 +523,7 @@ btnDoCreate.addEventListener("click", async () => {
 
         // Display mnemonic words
         const words = wallet.mnemonic.split(" ");
-        mnemonicDisplay.innerHTML = words.map((w: string, i: number) => `
-            <div class="mnemonic-word">
-                <span class="mnemonic-index">${i + 1}.</span> ${w}
-            </div>
-        `).join("");
+        renderMnemonic(words);
 
         showPanel("backup-panel");
     } catch (e) {
@@ -533,9 +634,9 @@ function enterDashboard() {
         dashboardListenersAttached = true;
     }
 
-    const btnReceive = document.getElementById("btn-receive")!;
-    const receiveModal = document.getElementById("receive-modal")!;
-    const btnCloseReceive = document.getElementById("btn-close-receive")!;
+    const btnReceive = requireElement<HTMLElement>("btn-receive");
+    const receiveModal = requireElement<HTMLElement>("receive-modal");
+    const btnCloseReceive = requireElement<HTMLElement>("btn-close-receive");
     if (!(btnReceive as any)._receiveListenerAttached) {
         (btnReceive as any)._receiveListenerAttached = true;
         btnReceive.addEventListener("click", async () => {
@@ -545,10 +646,7 @@ function enterDashboard() {
                 : getAddressForNetwork(currentNetwork);
 
             const qrCanvas = document.getElementById("qr-canvas") as HTMLCanvasElement;
-            if (currentNetwork === "aera_usdt") {
-                addr = "AERA USDT is temporarily unavailable";
-                if (qrCanvas) qrCanvas.style.display = "none";
-            } else if (!addr || !addr.trim() || addr === "Address not generated" || addr.includes("...")) {
+            if (!addr || !addr.trim() || addr === "Address not generated" || addr.includes("...")) {
                 addr = "Address not generated";
                 if (qrCanvas) qrCanvas.style.display = "none";
             } else {
@@ -565,8 +663,10 @@ function enterDashboard() {
                     }
                 }
             }
-            document.getElementById("receive-network-name")!.textContent = netName;
-            document.getElementById("receive-address-full")!.textContent = addr;
+            const netNameEl = document.getElementById("receive-network-name");
+            const addrEl = document.getElementById("receive-address-full");
+            if (netNameEl) netNameEl.textContent = netName;
+            if (addrEl) addrEl.textContent = addr;
             receiveModal.classList.add("active");
         });
         btnCloseReceive.addEventListener("click", () => receiveModal.classList.remove("active"));
@@ -592,37 +692,11 @@ async function updateActivity() {
         const activities: any[] = await invoke("get_activity", { address: addrLower });
 
         if (activities.length === 0) {
-            activityList.innerHTML = `<div style="text-align: center; padding: 20px; opacity: 0.5;">No activity found</div>`;
+            renderActivityMessage("No activity found");
             return;
         }
 
-        activityList.innerHTML = activities.map(tx => {
-            const isSent = (tx.from || "").toLowerCase() === addrLower;
-            const date = new Date(tx.timestamp * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-
-            // Format 18 decimals accurately
-            const amountBase = BigInt(tx.amount);
-            const decimals = BigInt(10) ** BigInt(18);
-            const whole = amountBase / decimals;
-            const frac = amountBase % decimals;
-            const fracStr = frac.toString().padStart(18, '0').substring(0, 4);
-            const amountFormatted = `${whole}.${fracStr}`;
-
-            return `
-                <div class="activity-item">
-                    <div class="activity-left">
-                        <div class="activity-type">${isSent ? 'Sent' : 'Received'} ${tx.chain}</div>
-                        <div class="activity-date">${date}</div>
-                    </div>
-                    <div class="activity-right">
-                        <div class="activity-amount ${isSent ? 'sent' : 'received'}">
-                            ${isSent ? '-' : '+'}${amountFormatted} ${tx.chain}
-                        </div>
-                        <div class="activity-status status-${tx.status.toLowerCase()}">${tx.status}</div>
-                    </div>
-                </div>
-            `;
-        }).join("");
+        renderActivities(activities, addrLower);
 
     } catch (e) {
         console.error("Activity update failed", e);
@@ -636,90 +710,57 @@ async function updateStats() {
         peerCountEl.textContent = netInfo.peer_count.toString();
 
         // Update AERA asset balance always
-        let aeraInfo: any = null;
         try {
-            aeraInfo = await invoke("get_balance", { address: currentAddress });
+            const aeraInfo: any = await invoke("get_balance", { address: currentAddress });
             assetAeraVal.textContent = aeraInfo.balance_formatted;
             lastBalances.aera = aeraInfo.balance_formatted;
         } catch (e) {
             console.error("AERA balance fetch failed", e);
         }
 
-        // Refresh native fee balances for ETH/TRX (if addresses available)
-        if (networkAddresses.eth && networkAddresses.eth !== "Address not generated") {
-            try {
-                const ethBal: string = await invoke("get_eth_balance", { address: networkAddresses.eth });
-                lastFeeBalances.eth = ethBal;
-                const ethVal = document.getElementById("asset-native-eth-val");
-                if (ethVal) ethVal.textContent = ethBal;
-            } catch (e) {
-                console.error("ETH balance fetch failed", e);
-            }
+        const now = Date.now();
+        const shouldRefreshFees = now - lastFeeFetchAt > FEE_REFRESH_MS;
+        
+        // Track if we already fetched these balances in this cycle
+        let ethFetched = false;
+        let trxFetched = false;
+        
+        if (shouldRefreshFees) {
+            // Refresh native fee balances for ETH/TRX (if addresses available)
+            await fetchAndUpdateBalance("get_eth_balance", networkAddresses.eth, "asset-native-eth-val", "eth", lastFeeBalances);
+            await fetchAndUpdateBalance("get_trx_balance", networkAddresses.tron, "asset-trx-val", "tron", lastFeeBalances);
+            lastFeeFetchAt = now;
+            ethFetched = true;
+            trxFetched = true;
         }
-        if (networkAddresses.tron && networkAddresses.tron !== "Address not generated") {
-            try {
-                const trxBal: string = await invoke("get_trx_balance", { address: networkAddresses.tron });
-                lastFeeBalances.tron = trxBal;
-                const trxVal = document.getElementById("asset-trx-val");
-                if (trxVal) trxVal.textContent = trxBal;
-            } catch (e) {
-                console.error("TRX balance fetch failed", e);
-            }
-        }
-
-        // Fetch balances for other assets (placeholder/bridge check)
-        // ... (can add more specific fetchers here)
 
         // Update main balance display based on network
         if (currentNetwork === "aera") {
             balanceEl.textContent = lastBalances.aera;
         } else if (currentNetwork === "eth") {
-            if (networkAddresses.eth && networkAddresses.eth !== "Address not generated") {
-                try {
-                    const bal: string = await invoke("get_eth_balance", { address: networkAddresses.eth });
-                    lastBalances.eth = bal;
-                    balanceEl.textContent = bal;
-                    const ethVal = document.getElementById("asset-native-eth-val");
-                    if (ethVal) ethVal.textContent = bal;
-                    lastFeeBalances.eth = bal;
-                } catch (e) {
-                    console.error("ETH balance fetch failed", e);
-                    balanceEl.textContent = lastBalances.eth;
-                }
+            const bal = await fetchAndUpdateBalance("get_eth_balance", networkAddresses.eth, "asset-native-eth-val", "eth", lastBalances);
+            if (bal) {
+                balanceEl.textContent = bal;
+                if (!ethFetched) lastFeeBalances.eth = bal;
             } else {
                 balanceEl.textContent = lastBalances.eth;
             }
             updateFeeHints(currentNetwork);
         } else if (currentNetwork === "tron_native") {
-            if (networkAddresses.tron && networkAddresses.tron !== "Address not generated") {
-                try {
-                    const trxBal: string = await invoke("get_trx_balance", { address: networkAddresses.tron });
-                    lastBalances.tron_native = trxBal;
-                    balanceEl.textContent = trxBal;
-                    const trxVal = document.getElementById("asset-trx-val");
-                    if (trxVal) trxVal.textContent = trxBal;
-                    lastFeeBalances.tron = trxBal;
-                } catch (e) {
-                    console.error("TRX balance fetch failed", e);
-                    balanceEl.textContent = lastBalances.tron_native;
-                }
+            const bal = await fetchAndUpdateBalance("get_trx_balance", networkAddresses.tron, "asset-trx-val", "tron_native", lastBalances);
+            if (bal) {
+                balanceEl.textContent = bal;
+                if (!trxFetched) lastFeeBalances.tron = bal;
             } else {
                 balanceEl.textContent = lastBalances.tron_native;
             }
             updateFeeHints(currentNetwork);
         } else if (currentNetwork === "tron") {
-            if (networkAddresses.tron && networkAddresses.tron !== "Address not generated") {
-                try {
-                    const bal: string = await invoke("get_tron_balance", { address: networkAddresses.tron });
-                    lastBalances.tron = bal;
-                    balanceEl.textContent = bal;
-                    const tronVal = document.getElementById("asset-tron-val");
-                    if (tronVal) tronVal.textContent = bal;
-                    const trxBal: string = await invoke("get_trx_balance", { address: networkAddresses.tron });
-                    lastFeeBalances.tron = trxBal;
-                } catch (e) {
-                    console.error("TRON balance fetch failed", e);
-                    balanceEl.textContent = lastBalances.tron;
+            const bal = await fetchAndUpdateBalance("get_tron_balance", networkAddresses.tron, "asset-tron-val", "tron", lastBalances);
+            if (bal) {
+                balanceEl.textContent = bal;
+                if (!trxFetched) {
+                    await fetchAndUpdateBalance("get_trx_balance", networkAddresses.tron, "asset-trx-val", "tron", lastFeeBalances);
                 }
             } else {
                 balanceEl.textContent = lastBalances.tron;
@@ -729,17 +770,9 @@ async function updateStats() {
             if (!networkAddresses.bridge_eth && networkAddresses.eth) {
                 networkAddresses.bridge_eth = networkAddresses.eth;
             }
-            if (networkAddresses.bridge_eth && networkAddresses.bridge_eth !== "Address not generated") {
-                try {
-                    const bal: string = await invoke("get_eth_usdt_balance", { address: networkAddresses.bridge_eth });
-                    lastBalances.bridge_eth = bal;
-                    balanceEl.textContent = bal;
-                    const ethUsdtVal = document.getElementById("asset-eth-val");
-                    if (ethUsdtVal) ethUsdtVal.textContent = bal;
-                } catch (e) {
-                    console.error("ERC-20 USDT balance fetch failed", e);
-                    balanceEl.textContent = lastBalances.bridge_eth;
-                }
+            const bal = await fetchAndUpdateBalance("get_eth_usdt_balance", networkAddresses.bridge_eth, "asset-eth-val", "bridge_eth", lastBalances);
+            if (bal) {
+                balanceEl.textContent = bal;
             } else {
                 balanceEl.textContent = lastBalances.bridge_eth;
             }
@@ -765,7 +798,8 @@ document.querySelectorAll(".tab-link").forEach(button => {
         document.querySelectorAll(".tab-link").forEach(b => b.classList.remove("active"));
         button.classList.add("active");
         document.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active"));
-        document.getElementById(tabName)!.classList.add("active");
+        const pane = document.getElementById(tabName);
+        if (pane) pane.classList.add("active");
 
         if (tabName === "bridge") {
             updateFeeHints(currentNetwork);
@@ -784,32 +818,25 @@ document.querySelectorAll(".tab-link").forEach(button => {
                 }
                 btnStartMining.style.display = st.is_active ? "none" : "block";
                 btnStopMining.style.display = st.is_active ? "block" : "none";
-            } catch (_) { /* node not inited */ }
+        } catch (e) {
+            console.warn("Failed to load mining status:", e);
+        }
         }
     });
 });
 
 // Send Transaction Toggle
-const btnSendToggle = document.getElementById("btn-send-toggle")!;
-const sendSection = document.getElementById("send-section")!;
-const btnSendCancel = document.getElementById("btn-send-cancel")!;
+const btnSendToggle = requireElement<HTMLElement>("btn-send-toggle");
+const sendSection = requireElement<HTMLElement>("send-section");
+const btnSendCancel = requireElement<HTMLElement>("btn-send-cancel");
 
 btnSendToggle.addEventListener("click", () => sendSection.classList.add("active"));
 btnSendCancel.addEventListener("click", () => sendSection.classList.remove("active"));
 
 // Send Execution (secure password modal, no prompt())
-const btnSendExecute = document.getElementById("btn-send-execute")!;
+const btnSendExecute = requireElement<HTMLElement>("btn-send-execute");
 const sendToInput = document.getElementById("send-to") as HTMLInputElement;
 const sendAmountInput = document.getElementById("send-amount") as HTMLInputElement;
-
-function encodeAmount(amount: number, network: string): string {
-    const dec = CHAIN_DECIMALS[network] ?? 18;
-    const mult = BigInt(10) ** BigInt(dec);
-    const [w, f = ""] = amount.toFixed(Math.min(dec, 18)).split(".");
-    const frac = f.padEnd(dec, "0").slice(0, dec);
-    const base = BigInt(w || "0") * mult + BigInt(frac || "0");
-    return base.toString();
-}
 
 function closeSendPasswordModal() {
     pendingSend = null;
@@ -821,9 +848,6 @@ btnSendExecute.addEventListener("click", () => {
     const to = sendToInput.value?.trim();
     const amount = parseFloat(sendAmountInput.value);
 
-    if (currentNetwork === "aera_usdt") {
-        return alert("AERA USDT transfers are temporarily unavailable.");
-    }
     if (currentNetwork === "tron_native") {
         return alert("Native transfers are not supported yet. Please select a USDT or AERA network.");
     }
@@ -864,7 +888,7 @@ btnSendPasswordConfirm.addEventListener("click", async () => {
             if (feeNeeded <= 0) {
                 return alert("Insufficient TRX for network fee. Please top up your TRX balance.");
             }
-        }
+            }
         let result: any;
         if (network === "aera" || network === "aera_usdt") {
             const assetType = network === "aera" ? "aera" : "usdt";
@@ -947,12 +971,12 @@ btnLogout.addEventListener("click", () => {
 // btnLoginForgot removed for security.
 
 // Mining Controls
-const btnStartMining = document.getElementById("btn-start-mining")!;
-const btnStopMining = document.getElementById("btn-stop-mining")!;
-const mineHashrate = document.getElementById("mine-hashrate")!;
-const mineReward = document.getElementById("mine-reward")!;
-const mineBlocks = document.getElementById("mine-blocks")!;
-const mineDifficulty = document.getElementById("mine-difficulty")!;
+const btnStartMining = requireElement<HTMLElement>("btn-start-mining");
+const btnStopMining = requireElement<HTMLElement>("btn-stop-mining");
+const mineHashrate = requireElement<HTMLElement>("mine-hashrate");
+const mineReward = requireElement<HTMLElement>("mine-reward");
+const mineBlocks = requireElement<HTMLElement>("mine-blocks");
+const mineDifficulty = requireElement<HTMLElement>("mine-difficulty");
 
 const mineNodeStatus = document.getElementById("mine-node-status");
 
