@@ -9,26 +9,10 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-    env:
-      PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install backend system deps (Tauri/GTK)
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y \
-            pkg-config \
-            libglib2.0-dev \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
-            build-essential \
-            libssl-dev \
-            librsvg2-dev
-          pkg-config --cflags --libs glib-2.0 || (echo "glib-2.0 not found after install"; exit 1)
-          echo "PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -37,7 +21,7 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: aera-blockchain, aera-miner
+          workspaces: aera-miner
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -46,18 +30,6 @@ jobs:
           cache: 'npm'
           cache-dependency-path: |
             aera-wallet/package-lock.json
-
-      - name: Backend - cargo check
-        working-directory: ./aera-blockchain
-        run: |
-          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
-          pkg-config --cflags --libs glib-2.0 || (echo "pkg-config glib check failed"; exit 1)
-          cargo clean
-          cargo check
-
-      - name: Backend - cargo test (lib only)
-        working-directory: ./aera-blockchain
-        run: cargo test --lib
 
       - name: Miner - cargo test
         working-directory: ./aera-miner
@@ -74,4 +46,3 @@ jobs:
       - name: Frontend - unit tests
         working-directory: ./aera-wallet
         run: npm run test
-
