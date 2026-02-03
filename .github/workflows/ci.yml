@@ -9,6 +9,8 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    env:
+      PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig
 
     steps:
       - name: Checkout
@@ -46,15 +48,18 @@ jobs:
 
       - name: Backend - cargo check
         working-directory: ./aera-blockchain
-        env:
-          PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig
-        run: cargo check
+        run: |
+          export PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig
+          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
+          pkg-config --cflags --libs glib-2.0 || (echo "pkg-config glib check failed"; exit 1)
+          cargo clean -p glib-sys 2>/dev/null || true
+          cargo check
 
       - name: Backend - cargo test (lib only)
         working-directory: ./aera-blockchain
-        env:
-          PKG_CONFIG_PATH: /usr/lib/x86_64-linux-gnu/pkgconfig
-        run: cargo test --lib
+        run: |
+          export PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig
+          cargo test --lib
 
       - name: Miner - cargo test
         working-directory: ./aera-miner
