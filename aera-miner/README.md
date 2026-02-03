@@ -1,72 +1,85 @@
 ## AERA Miner (CLI)
 
-Minimal mining utility compatible with AERA Wallet.
+The **AERA Miner** is a minimal command‑line utility for Proof‑of‑Work style mining on the AERA network.
+It is designed to be compatible with the AERA desktop wallet keystore and to run alongside a local AERA node.
 
 ### Compatibility
+
 - Keystore format matches `aera-blockchain/src/wallet/keystore.rs`.
-- Address derivation is identical to AERA Wallet.
-- Keystore stored at `{data_dir}/keystore`.
+- Address derivation is identical to the AERA Wallet.
+- Keystore is stored under `{data_dir}/keystore`.
 
 ### Configuration
-`config.toml` in the project root:
-```
+
+`config.toml` in the miner project root:
+
+```toml
 data_dir = "./data"
 node_url = "http://127.0.0.1:3030"
 mining_address = ""
 ```
 
-### Full Setup (From Scratch)
-1) Build:
-```
+### Basic usage
+
+Build (from `aera-miner/`):
+
+```bash
 cargo build --release
 ```
-2) Create a wallet:
+
+Create a new wallet:
+
+```bash
+.\target\release\aera-miner init
 ```
-.\target\release\aera-miner init --password "pass"
-```
-This prints `Address` and `Mnemonic`. Save the mnemonic securely.
-3) Start mining:
-```
+
+Start mining:
+
+```bash
 .\target\release\aera-miner start --address "aera1..."
 ```
 
-### CLI Usage
-```
-.\target\release\aera-miner init --password "<password>"
-.\target\release\aera-miner import --mnemonic "<12 words>" --password "<password>"
-.\target\release\aera-miner export --address "aera1..." --out ".\\wallet.json"
-.\target\release\aera-miner start --address "aera1..."
-.\target\release\aera-miner stop
-.\target\release\aera-miner status
+For full command help:
+
+```bash
+.\target\release\aera-miner --help
 ```
 
-### Create Wallet
-```
-.\target\release\aera-miner init --password "<password>"
-```
-Result:
-- `Mnemonic` (12 words) for recovery.
-- `Address` for mining.
+---
 
-### Import Wallet
-If you have a mnemonic:
-```
-.\target\release\aera-miner import --mnemonic "<12 words>" --password "<password>"
-```
+## ⚠️ Disclaimer & Terms of Use
 
-If you have a keystore file `wallet_<address>.json`:
-1) Copy the file to `.\data\keystore\`
-2) Start mining:
-```
-.\target\release\aera-miner start --address "aera1..."
-```
+The miner is part of an **open‑source experimental startup project**. It is provided **“as is”** with **no warranty**
+regarding correctness, profitability, or suitability for any particular purpose.
 
-### Run Miner
-`start` runs mining in the current terminal. Stop by:
-- `Ctrl+C`, or
-- `.\target\release\aera-miner stop` in another terminal.
+By running this miner, **you acknowledge and accept** that:
 
-### Security Notes
-- Passwords are never logged.
-- Mnemonic is only printed during `init`.
+- Mining **does not guarantee any rewards**. Difficulty, rewards, and network rules may change over time.
+- You are solely responsible for:
+  - system security (OS hardening, malware protection),
+  - power and hardware costs,
+  - correct configuration of `node_url`, `data_dir`, and `mining_address`.
+- The AERA team and contributors **are not liable** for:
+  - hardware damage or wear,
+  - increased electricity bills,
+  - any loss of funds due to bugs, vulnerabilities, or misconfiguration.
+
+Always verify that you are running binaries you built yourself from the **official open‑source repository**,
+and never download “optimized miners” from untrusted sources.
+
+---
+
+## Open‑Source Project & Collaboration
+
+This miner is maintained on a **best‑effort basis**. Features may evolve depending on:
+
+- protocol changes in `aera-blockchain`,
+- feedback from users and node operators,
+- available time and interest from the community.
+
+We welcome:
+
+- bug reports and reproducible issues,
+- reasonable feature requests (better metrics, more robust control, etc.),
+- pull requests that keep the code simple, safe, and well‑documented.
 
