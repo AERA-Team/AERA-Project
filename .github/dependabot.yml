@@ -1,0 +1,12 @@
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/aera-wallet"
+    schedule:
+      interval: "weekly"
+    # Не предлагать мажорные обновления vitest (v4 ломает CI)
+    ignore:
+      - dependency-name: "vitest"
+        update-types: ["version-update:semver-major"]

@@ -1342,12 +1342,10 @@ mod tests {
         assert!(addr1.starts_with("EQ"), "TON address should start with EQ");
     }
 
+    /// Requires OS Secret Service (keyring). Run with: cargo test -- --ignored
     #[test]
+    #[ignore]
     fn test_vault_mnemonic_mapping() {
-        // Skip in CI: no Secret Service / D-Bus keyring on GitHub Actions
-        if std::env::var("CI").is_ok() {
-            return;
-        }
         let tmp = tempdir().unwrap();
         let mut vault = KeyVault::open(tmp.path()).unwrap();
         let password = "test-password";
